@@ -1,0 +1,26 @@
+# Fonts
+font.family: Arial
+font.size: 14
+axes.labelsize: 14
+axes.titlesize: 16
+xtick.labelsize: 14
+ytick.labelsize: 14
+legend.fontsize: 14
+
+# Axes
+axes.linewidth: 1.5
+
+# Tick sizes
+xtick.major.size: 8
+ytick.major.size: 8
+xtick.minor.size: 4
+ytick.minor.size: 4
+xtick.major.width: 1.5
+ytick.major.width: 1.5
+xtick.minor.width: 1
+ytick.minor.width: 1
+
+
+# Enable LaTeX for math text
+mathtext.fontset: cm
+mathtext.default: it
