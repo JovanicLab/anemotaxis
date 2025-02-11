@@ -18,23 +18,30 @@ def plot_larva_data(larva_data, larva_id, style_path=None):
     length = np.array(larva_data["length"])
     curvature = np.array(larva_data["curvature"])
 
-    # Create the plot
-    fig, ax = plt.subplots(figsize=(8, 6))
+    # Create the subplots
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
 
-    ax.plot(time, speed, label="Speed", color="blue", linewidth=2)
-    ax.plot(time, length, label="Length", color="green", linewidth=2)
-    ax.plot(time, curvature, label="Curvature", color="red", linewidth=2)
+    # Plot speed
+    ax1.plot(time, speed, label="Speed", color="blue", linewidth=2)
+    ax1.set_ylabel("Speed")
+    ax1.legend()
+    ax1.grid(False)
 
-    # Labels and title
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Values")
-    ax.set_title(f"Larva {larva_id}")
+    # Plot length
+    ax2.plot(time, length, label="Length", color="green", linewidth=2)
+    ax2.set_ylabel("Length")
+    ax2.legend()
+    ax2.grid(False)
 
-    # Remove grid
-    ax.grid(False)
+    # Plot curvature
+    ax3.plot(time, curvature, label="Curvature", color="red", linewidth=2)
+    ax3.set_xlabel("Time (s)")
+    ax3.set_ylabel("Curvature")
+    ax3.legend()
+    ax3.grid(False)
 
-    # Set legend
-    ax.legend()
+    # Set the title for the entire figure
+    fig.suptitle(f"Larva {larva_id}")
 
     # Show the plot
     plt.show()

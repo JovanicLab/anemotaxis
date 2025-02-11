@@ -2,6 +2,7 @@ import pandas as pd
 import os
 import re
 import numpy as np
+from math import sqrt, asin
 
 def parse_protocol(protocol_str):
     """Parses the protocol section of the filename.
@@ -128,3 +129,33 @@ def extract_all_larvae(data_folder):
             }
     
     return larvae_data
+
+def array_with_nan(lst):
+    return np.array([np.nan if x is None else x for x in lst])
+
+def compute_v_and_axis(larvae_data):
+    for larva_id, larva in larvae_data.items():
+        speed = larva["data"]["speed"]
+        curvature = larva["data"]["curvature"]
+        time = larva["data"]["time"]
+
+        # Normalize speed and curvature by the mean speed
+        mean_speed = np.nanmean(array_with_nan(speed))
+        larva["data"]["speed_normalized"] = array_with_nan(speed) / mean_speed
+        larva["data"]["curvature_normalized"] = array_with_nan(curvature) / mean_speed
+
+    return larvae_data
+
+def compute_navigational_index(larvae_data):
+    for larva_id, larva in larvae_data.items():
+        larva["data"]["mean_speed"] = np.nanmean(larva["data"]["speed_normalized"])
+        larva["data"]["mean_curvature"] = np.nanmean(larva["data"]["curvature_normalized"])
+
+    all_mean_speeds = [larva["data"]["mean_speed"] for larva in larvae_data.values()]
+    all_mean_curvatures = [larva["data"]["mean_curvature"] for larva in larvae_data.values()]
+
+    mean_speed = np.mean(all_mean_speeds)
+    mean_curvature = np.mean(all_mean_curvatures)
+
+    navigational_index = mean_curvature / mean_speed
+    return navigational_index, navigational_index  # Return a tuple with two values
