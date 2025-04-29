@@ -1,4 +1,4 @@
-### Sharbat 2025, slight modifications of Timothee 2024
+### Sharbat 2025, modifications of Timothee 2024
 
 ### Functions to extract the dat files for each genotype for each experiments. 
 
