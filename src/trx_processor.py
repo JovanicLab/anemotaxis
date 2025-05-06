@@ -2560,7 +2560,7 @@ def analyze_cast_directions(trx_data, fps=3):
     }
 
 
-def analyze_perpendicular_cast_directions(trx_data, angle_width=15, min_frame=3):
+def analyze_perpendicular_cast_directions(trx_data, angle_width=5, min_frame=3, basepath=None):
     """
     Analyze the probability of upstream vs downstream casts when larvae are perpendicular to flow.
     Shows per-larva casting biases and separates analysis for small casts, large casts, and all casts.
@@ -2577,6 +2577,8 @@ def analyze_perpendicular_cast_directions(trx_data, angle_width=15, min_frame=3)
     import matplotlib.pyplot as plt
     from scipy import stats
     import pandas as pd
+    from scipy.ndimage import gaussian_filter1d
+    from matplotlib.lines import Line2D
     
     # Determine which data structure we're working with
     if 'data' in trx_data:
@@ -2722,6 +2724,9 @@ def analyze_perpendicular_cast_directions(trx_data, angle_width=15, min_frame=3)
                 'all': {'upstream': 0, 'downstream': 0}
             }
             
+            # Track all casts separately instead of combining during the loop
+            all_casts_data = []
+            
             # Process large casts
             for start in large_cast_starts:
                 try:
@@ -2741,7 +2746,7 @@ def analyze_perpendicular_cast_directions(trx_data, angle_width=15, min_frame=3)
                         continue
                         
                     cast_sequence = cast_angles[start:end]
-                    if len(cast_sequence) < 3:  # Need at least 3 frames
+                    if len(cast_sequence) < min_frame:  # Need at least min_frame frames
                         continue
                     
                     # Find frame with maximum deviation
@@ -2756,10 +2761,14 @@ def analyze_perpendicular_cast_directions(trx_data, angle_width=15, min_frame=3)
                     total_counts['large'][cast_direction] += 1
                     larva_counts['large'][cast_direction] += 1
                     
-                    # Update total counts too
-                    total_counts['all'][cast_direction] += 1
-                    larva_counts['all'][cast_direction] += 1
-                        
+                    # Store this cast for the "all" category
+                    all_casts_data.append({
+                        'type': 'large',
+                        'direction': cast_direction,
+                        'init_angle': init_orientation,
+                        'max_angle': max_cast_angle
+                    })
+                    
                 except (IndexError, ValueError):
                     continue
             
@@ -2783,7 +2792,7 @@ def analyze_perpendicular_cast_directions(trx_data, angle_width=15, min_frame=3)
                             continue
                             
                         cast_sequence = cast_angles[start:end]
-                        if len(cast_sequence) < 3:  # Need at least 3 frames
+                        if len(cast_sequence) < min_frame:  # Need at least min_frame frames
                             continue
                         
                         # Find frame with maximum deviation
@@ -2798,12 +2807,22 @@ def analyze_perpendicular_cast_directions(trx_data, angle_width=15, min_frame=3)
                         total_counts['small'][cast_direction] += 1
                         larva_counts['small'][cast_direction] += 1
                         
-                        # Update total counts too
-                        total_counts['all'][cast_direction] += 1
-                        larva_counts['all'][cast_direction] += 1
-                            
+                        # Store this cast for the "all" category
+                        all_casts_data.append({
+                            'type': 'small',
+                            'direction': cast_direction,
+                            'init_angle': init_orientation,
+                            'max_angle': max_cast_angle
+                        })
+                        
                     except (IndexError, ValueError):
                         continue
+            
+            # Now process the "all" category after both large and small casts have been analyzed
+            for cast_data in all_casts_data:
+                direction = cast_data['direction']
+                total_counts['all'][direction] += 1
+                larva_counts['all'][direction] += 1
             
             # Calculate per-larva probabilities if enough casts
             # For each cast type, require at least 3 casts to include in the analysis
@@ -2985,6 +3004,13 @@ def analyze_perpendicular_cast_directions(trx_data, angle_width=15, min_frame=3)
     plt.tight_layout()
     plt.subplots_adjust(top=0.85, wspace=0.3)  # Make room for the suptitle
     plt.show()
+    if basepath is not None:
+        # Create filename with angle width and timestamp
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filepath = os.path.join(basepath, f"perpendicular_cast_boxplot_angle{angle_width}_{timestamp}.svg")
+        plt.savefig(filepath, format='svg', bbox_inches='tight')
+        print(f"Saved boxplot to: {filepath}")
     
     # 2. Second figure: per-larva bar plots for ALL cast types
     # Create a 1x3 subplot layout (or fewer if some types have no data)
@@ -3075,6 +3101,15 @@ def analyze_perpendicular_cast_directions(trx_data, angle_width=15, min_frame=3)
         plt.tight_layout()
         plt.subplots_adjust(hspace=0.3)
         plt.show()
+        #     # Save the figure if basepath is provided
+        # if basepath is not None:
+        #     # Create filename with angle width and timestamp
+        #     from datetime import datetime
+        #     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        #     filepath = os.path.join(basepath, f"perpendicular_cast_boxplot_angle{angle_width}_{timestamp}.svg")
+        #     plt.savefig(filepath, format='svg', bbox_inches='tight')
+        #     print(f"Saved boxplot to: {filepath}")
+    
     
     # Return comprehensive results
     return {
@@ -3091,261 +3126,625 @@ def analyze_perpendicular_cast_directions(trx_data, angle_width=15, min_frame=3)
     }
 
 
-def analyze_cast_head_dynamics(trx_data, larva_id=None, max_events=10):
+def analyze_perpendicular_cast_directions_new(trx_data, angle_width=5, min_frame=3,basepath=None):
     """
-    Analyze head angle dynamics during casting events.
+    Analyze whether casts are biased toward upstream or downstream when larvae are perpendicular to flow.
+    Perpendicular is defined as orientation around ±90° within angle_width window.
     
     Args:
-        trx_data (dict): Tracking data dictionary
-        larva_id (str, optional): ID of specific larva to analyze, if None, selects a random larva
-        max_events (int): Maximum number of cast events to plot
+        trx_data (dict): Tracking data dictionary containing larvae data
+        angle_width (int): Width of perpendicular orientation sector in degrees
+        min_frame (int): Minimum number of frames to consider for a cast
     
     Returns:
-        dict: Statistics about cast events and head angle dynamics
+        dict: Cast direction metrics including probabilities and statistical analysis
     """
     import numpy as np
     import matplotlib.pyplot as plt
-    from matplotlib.gridspec import GridSpec
-    import random
+    from scipy import stats
+    import pandas as pd
+    from scipy.ndimage import gaussian_filter1d
+    from matplotlib.lines import Line2D
     
-    # Helper function to extract cast events from a single larva
-    def extract_cast_events(larva_data):
-        # Get behavioral states
-        states = np.array(larva_data['global_state_large_state']).flatten()
-        
-        # Find cast bout starts and ends
-        cast_starts = np.where((states[1:] == 2) & (states[:-1] != 2))[0] + 1
-        cast_ends = []
-        
-        for start in cast_starts:
-            end_idx = np.where(states[start:] != 2)[0]
-            if len(end_idx) > 0:
-                cast_ends.append(start + end_idx[0])
-            else:
-                cast_ends.append(len(states) - 1)  # End of recording
-        
-        # Ensure we have the same number of starts and ends
-        n_events = min(len(cast_starts), len(cast_ends))
-        cast_starts = cast_starts[:n_events]
-        cast_ends = cast_ends[:n_events]
-        
-        # Ensure each cast has a valid duration
-        valid_casts = []
-        for i in range(n_events):
-            if cast_ends[i] - cast_starts[i] >= 3:  # At least 3 frames
-                valid_casts.append((cast_starts[i], cast_ends[i]))
-        
-        return valid_casts
-    
-    # Helper function to calculate angle between vectors
-    def calculate_angle_between_vectors(v1, v2):
-        """Calculate angle between two vectors in degrees"""
-        dot_product = np.sum(v1 * v2, axis=1)
-        norm_v1 = np.linalg.norm(v1, axis=1)
-        norm_v2 = np.linalg.norm(v2, axis=1)
-        
-        # Avoid division by zero
-        valid_mask = (norm_v1 > 0) & (norm_v2 > 0)
-        if not np.any(valid_mask):
-            return np.zeros(len(v1))
-            
-        cos_angle = np.zeros(len(v1))
-        cos_angle[valid_mask] = dot_product[valid_mask] / (norm_v1[valid_mask] * norm_v2[valid_mask])
-        
-        # Clip to handle floating point errors
-        cos_angle = np.clip(cos_angle, -1.0, 1.0)
-        angles = np.degrees(np.arccos(cos_angle))
-        
-        return angles
-    
-    # Determine which larva to analyze
+    # Determine which data structure we're working with
     if 'data' in trx_data:
         data_to_process = trx_data['data']
+        n_larvae = trx_data['metadata']['total_larvae']
     else:
         data_to_process = trx_data
+        n_larvae = len(data_to_process)
     
-    if larva_id is None:
-        # Select a random larva with good data
-        larvae_with_casts = []
-        for lid, larva_data in data_to_process.items():
-            try:
-                # Extract larva data if nested
-                if 'data' in larva_data:
-                    larva_data = larva_data['data']
+    # Store raw counts for analysis, separated by cast type
+    total_counts = {
+        'small': {'upstream': 0, 'downstream': 0},
+        'large': {'upstream': 0, 'downstream': 0},
+        'all': {'upstream': 0, 'downstream': 0}
+    }
+    
+    # Store per-larva probabilities for box plot
+    larva_probabilities = {
+        'small': {'upstream': [], 'downstream': []},
+        'large': {'upstream': [], 'downstream': []},
+        'all': {'upstream': [], 'downstream': []}
+    }
+    
+    # Store per-larva counts (for plotting)
+    per_larva_counts = {
+        'small': {'upstream': [], 'downstream': [], 'larva_ids': [], 'total': []},
+        'large': {'upstream': [], 'downstream': [], 'larva_ids': [], 'total': []},
+        'all': {'upstream': [], 'downstream': [], 'larva_ids': [], 'total': []}
+    }
+    
+    # Define perpendicular angle ranges (both left and right sides)
+    # With wind blowing towards negative x, perpendicular is ±90°
+    left_perp_range = (-90 - angle_width, -90 + angle_width)
+    right_perp_range = (90 - angle_width, 90 + angle_width)
+    
+    def is_perpendicular(angle):
+        """Check if angle is in perpendicular range"""
+        return ((left_perp_range[0] <= angle <= left_perp_range[1]) or 
+                (right_perp_range[0] <= angle <= right_perp_range[1]))
+    
+    def determine_cast_direction(init_angle, cast_angle):
+        """
+        Determine if cast is upstream or downstream when larva is perpendicular.
+        
+        Wind is blowing towards negative x direction.
+        When oriented at -90° (left perpendicular), casting towards positive x is upstream
+        When oriented at +90° (right perpendicular), casting towards positive x is upstream
+        """
+        angle_diff = (cast_angle - init_angle) % 360
+        if angle_diff > 180:
+            angle_diff -= 360
+            
+        # If larva is around -90° (left perpendicular)
+        if left_perp_range[0] <= init_angle <= left_perp_range[1]:
+            # Positive angle_diff means turning clockwise (towards positive x/upstream)
+            return 'upstream' if angle_diff > 0 else 'downstream'
+        # If larva is around +90° (right perpendicular)
+        else:
+            # Negative angle_diff means turning counter-clockwise (towards positive x/upstream)
+            return 'upstream' if angle_diff < 0 else 'downstream'
+    
+    # Process each larva
+    larvae_processed = 0
+    for larva_id, larva_data in data_to_process.items():
+        try:
+            # Extract nested data if needed
+            if 'data' in larva_data:
+                larva_data = larva_data['data']
+            
+            # Check for small_large_state or fall back to large_state
+            has_small_large_state = 'global_state_small_large_state' in larva_data
+            
+            if has_small_large_state:
+                # Extract both small and large cast states
+                cast_states = np.array(larva_data['global_state_small_large_state']).flatten()
+                large_cast_mask = cast_states == 2.0  # Large casts = 2.0
+                small_cast_mask = cast_states == 1.5  # Small casts = 1.5
+                any_cast_mask = large_cast_mask | small_cast_mask
+            else:
+                # Fall back to just large state if small_large_state isn't available
+                cast_states = np.array(larva_data.get('cast', larva_data.get('global_state_large_state', []))).flatten()
+                large_cast_mask = cast_states == 2  # Only large casts available
+                small_cast_mask = np.zeros_like(large_cast_mask, dtype=bool)  # No small casts
+                any_cast_mask = large_cast_mask
                 
-                # Check if larva has spine data and state data
-                if ('x_spine' in larva_data and 'y_spine' in larva_data and
-                    'x_center' in larva_data and 'y_center' in larva_data and
-                    'global_state_large_state' in larva_data):
-                    events = extract_cast_events(larva_data)
-                    if len(events) > 0:
-                        larvae_with_casts.append(lid)
-            except Exception as e:
-                print(f"Error checking larva {lid}: {str(e)}")
+            if len(cast_states) == 0:
                 continue
-        
-        if not larvae_with_casts:
-            raise ValueError("No larvae with valid cast and angle data found")
-        
-        larva_id = random.choice(larvae_with_casts)
-        print(f"Selected random larva: {larva_id}")
+                
+            # Find start frames for different cast types
+            large_cast_starts = np.where((large_cast_mask[1:]) & (~large_cast_mask[:-1]))[0] + 1
+            small_cast_starts = np.where((small_cast_mask[1:]) & (~small_cast_mask[:-1]))[0] + 1
+            
+            # If no cast starts were found, try looking for any frame in a cast state
+            if len(large_cast_starts) == 0:
+                large_cast_starts = np.where(large_cast_mask)[0]
+            if len(small_cast_starts) == 0 and has_small_large_state:
+                small_cast_starts = np.where(small_cast_mask)[0]
+                
+            # Extract coordinates
+            x_spine = np.array(larva_data['x_spine'])
+            y_spine = np.array(larva_data['y_spine'])
+            x_center = np.array(larva_data['x_center']).flatten()
+            y_center = np.array(larva_data['y_center']).flatten()
+            
+            # Handle different spine data shapes
+            if x_spine.ndim == 1:  # 1D array
+                x_tail = x_spine
+                y_tail = y_spine
+                x_head = x_spine
+                y_head = y_spine
+            else:  # 2D array with shape (spine_points, frames)
+                x_tail = x_spine[-1, :]
+                y_tail = y_spine[-1, :]
+                x_head = x_spine[0, :]
+                y_head = y_spine[0, :]
+            
+            # Calculate vectors
+            tail_to_center = np.column_stack([
+                x_center - x_tail,
+                y_center - y_tail
+            ])
+            
+            center_to_head = np.column_stack([
+                x_head - x_center,
+                y_head - y_center
+            ])
+            
+            # Calculate angles
+            # Note: arctan2(y, -x) is correct for wind in negative x direction
+            orientation_angles = np.degrees(np.arctan2(tail_to_center[:, 1], -tail_to_center[:, 0]))
+            cast_angles = np.degrees(np.arctan2(center_to_head[:, 1], -center_to_head[:, 0]))
+            
+            # Initialize counts for this larva
+            larva_counts = {
+                'small': {'upstream': 0, 'downstream': 0},
+                'large': {'upstream': 0, 'downstream': 0},
+                'all': {'upstream': 0, 'downstream': 0}
+            }
+            
+            # Store all casts from this larva to process together
+            all_casts_data = []
+            
+            # Process large casts
+            for start in large_cast_starts:
+                try:
+                    if start >= len(orientation_angles):
+                        continue
+                        
+                    # Get initial orientation (at start of cast)
+                    init_orientation = orientation_angles[start]
+                    
+                    # Only analyze casts when orientation is perpendicular
+                    if not is_perpendicular(init_orientation):
+                        continue
+                        
+                    # Get maximum cast angle within a short window
+                    end = min(start + 6, len(cast_angles))  # Look at first 6 frames of cast
+                    if end <= start or end >= len(cast_angles):
+                        continue
+                        
+                    cast_sequence = cast_angles[start:end]
+                    if len(cast_sequence) < min_frame:  # Need at least min_frame frames
+                        continue
+                    
+                    # Find frame with maximum deviation
+                    angle_diffs = np.abs(cast_sequence - init_orientation)
+                    max_deviation_idx = np.argmax(angle_diffs)
+                    max_cast_angle = cast_sequence[max_deviation_idx]
+                    
+                    # Determine if cast is upstream or downstream
+                    cast_direction = determine_cast_direction(init_orientation, max_cast_angle)
+                    
+                    # Store this cast data
+                    all_casts_data.append({
+                        'type': 'large',
+                        'direction': cast_direction,
+                        'init_angle': init_orientation,
+                        'max_angle': max_cast_angle
+                    })
+                    
+                except (IndexError, ValueError) as e:
+                    continue
+            
+            # Process small casts if available
+            if has_small_large_state:
+                for start in small_cast_starts:
+                    try:
+                        if start >= len(orientation_angles):
+                            continue
+                            
+                        # Get initial orientation (at start of cast)
+                        init_orientation = orientation_angles[start]
+                        
+                        # Only analyze casts when orientation is perpendicular
+                        if not is_perpendicular(init_orientation):
+                            continue
+                            
+                        # Get maximum cast angle
+                        end = min(start + 6, len(cast_angles))  # Look at first 6 frames of cast
+                        if end <= start or end >= len(cast_angles):
+                            continue
+                            
+                        cast_sequence = cast_angles[start:end]
+                        if len(cast_sequence) < min_frame:  # Need at least min_frame frames
+                            continue
+                        
+                        # Find frame with maximum deviation
+                        angle_diffs = np.abs(cast_sequence - init_orientation)
+                        max_deviation_idx = np.argmax(angle_diffs)
+                        max_cast_angle = cast_sequence[max_deviation_idx]
+                        
+                        # Determine if cast is upstream or downstream
+                        cast_direction = determine_cast_direction(init_orientation, max_cast_angle)
+                        
+                        # Store this cast data
+                        all_casts_data.append({
+                            'type': 'small',
+                            'direction': cast_direction,
+                            'init_angle': init_orientation,
+                            'max_angle': max_cast_angle
+                        })
+                        
+                    except (IndexError, ValueError) as e:
+                        continue
+            
+            # Process all the casts we've collected
+            for cast_data in all_casts_data:
+                cast_type = cast_data['type']
+                direction = cast_data['direction']
+                
+                # Update counts for this specific cast type
+                total_counts[cast_type][direction] += 1
+                larva_counts[cast_type][direction] += 1
+                
+                # Also update the 'all' category
+                total_counts['all'][direction] += 1
+                larva_counts['all'][direction] += 1
+            
+            # Calculate per-larva probabilities if enough casts
+            # For each cast type, require at least 3 casts to include in the analysis
+            for cast_type in ['small', 'large', 'all']:
+                larva_total = sum(larva_counts[cast_type].values())
+                if larva_total >= 3:
+                    upstream_prob = larva_counts[cast_type]['upstream'] / larva_total
+                    downstream_prob = larva_counts[cast_type]['downstream'] / larva_total
+                    
+                    # Add probability to list
+                    larva_probabilities[cast_type]['upstream'].append(upstream_prob)
+                    larva_probabilities[cast_type]['downstream'].append(downstream_prob)
+                    
+                    # Save the raw counts for per-larva plotting
+                    per_larva_counts[cast_type]['upstream'].append(larva_counts[cast_type]['upstream'])
+                    per_larva_counts[cast_type]['downstream'].append(larva_counts[cast_type]['downstream'])
+                    per_larva_counts[cast_type]['larva_ids'].append(str(larva_id))
+                    per_larva_counts[cast_type]['total'].append(larva_total)
+            
+            # Count larva as processed if it had enough data for any cast type
+            if (sum(larva_counts['small'].values()) >= 3 or 
+                sum(larva_counts['large'].values()) >= 3 or 
+                sum(larva_counts['all'].values()) >= 3):
+                larvae_processed += 1
+                
+        except Exception as e:
+            print(f"Error processing larva {larva_id}: {str(e)}")
+            continue
     
-    # Get data for the selected larva
-    larva_data = data_to_process[larva_id]
-    if 'data' in larva_data:
-        larva_data = larva_data['data']
-    
-    # Extract data arrays
-    try:
-        x_spine = np.array(larva_data['x_spine'])
-        y_spine = np.array(larva_data['y_spine'])
-        x_center = np.array(larva_data['x_center']).flatten()
-        y_center = np.array(larva_data['y_center']).flatten()
-        time = np.array(larva_data['t']).flatten()
-        states = np.array(larva_data['global_state_large_state']).flatten()
-        angle_downer_upper = np.array(larva_data['angle_downer_upper_smooth_5']).flatten()
-    except KeyError as e:
-        raise KeyError(f"Missing required data field: {str(e)}")
-    
-    # Convert angle_downer_upper to degrees and reverse direction
-    # (assuming it's in radians, multiply by -1 to reverse)
-    angle_downer_upper_deg = -1 * np.degrees(angle_downer_upper)
-    
-    # Handle different spine data shapes
-    if x_spine.ndim == 1:  # 1D array
-        x_tail = np.copy(x_spine)
-        y_tail = np.copy(y_spine)
-        x_head = np.copy(x_spine)
-        y_head = np.copy(y_spine)
-    else:  # 2D array with shape (spine_points, frames)
-        x_tail = x_spine[-1, :] if len(x_spine) > 1 else x_spine.flatten()
-        y_tail = y_spine[-1, :] if len(y_spine) > 1 else y_spine.flatten()
-        x_head = x_spine[0, :] if len(x_spine) > 1 else x_spine.flatten()
-        y_head = y_spine[0, :] if len(y_spine) > 1 else y_spine.flatten()
-    
-    # Calculate vectors
-    tail_to_center = np.column_stack([
-        x_center - x_tail,
-        y_center - y_tail
-    ])
-    
-    center_to_head = np.column_stack([
-        x_head - x_center,
-        y_head - y_center
-    ])
-    
-    # Calculate angle between tail-to-center and center-to-head vectors
-    bend_angle = calculate_angle_between_vectors(tail_to_center, center_to_head)
-    
-    # Extract cast events
-    cast_events = extract_cast_events(larva_data)
-    
-    # Limit number of events to plot
-    if len(cast_events) > max_events:
-        # Select a diverse sample of cast events (short and long)
-        durations = [end - start for start, end in cast_events]
-        # Sort events by duration
-        sorted_indices = np.argsort(durations)
-        # Select events spread across duration range
-        indices_to_use = sorted_indices[::len(sorted_indices)//max_events][:max_events]
-        plot_events = [cast_events[i] for i in indices_to_use]
-    else:
-        plot_events = cast_events
-    
-    # Create figure
-    n_events = len(plot_events)
-    if n_events == 0:
-        print("No cast events found for this larva")
-        return None
-    
-    fig = plt.figure(figsize=(12, 2 * n_events))
-    gs = GridSpec(n_events, 2, figure=fig)
-    
-    # Plot each cast event
-    for i, (start, end) in enumerate(plot_events):
-        # Ensure we have a complete window
-        window_start = max(0, start - 5)  # 5 frames before cast
-        window_end = min(len(time), end + 5)  # 5 frames after cast
-        
-        # Extract data for this window
-        t_window = time[window_start:window_end] - time[window_start]
-        angle_du_window = angle_downer_upper_deg[window_start:window_end]
-        bend_angle_window = bend_angle[window_start:window_end]
-        states_window = states[window_start:window_end]
-        
-        # Create cast mask for highlighting
-        cast_mask = states_window == 2
-        
-        # Plot angle_downer_upper (converted to degrees and reversed)
-        ax1 = fig.add_subplot(gs[i, 0])
-        ax1.plot(t_window, angle_du_window, 'b-')
-        
-        # Highlight cast period
-        cast_times = t_window[cast_mask]
-        if len(cast_times) > 0:
-            ax1.axvspan(cast_times[0], cast_times[-1], alpha=0.2, color='red')
-        
-        ax1.set_ylabel('Angle downer-upper (°)\n(reversed)')
-        if i == n_events - 1:
-            ax1.set_xlabel('Time (s)')
+    # Calculate overall probabilities for each cast type
+    probabilities = {}
+    for cast_type in ['small', 'large', 'all']:
+        total_type_casts = sum(total_counts[cast_type].values())
+        if total_type_casts > 0:
+            probabilities[cast_type] = {
+                'upstream': total_counts[cast_type]['upstream'] / total_type_casts,
+                'downstream': total_counts[cast_type]['downstream'] / total_type_casts
+            }
         else:
-            ax1.set_xticklabels([])
+            probabilities[cast_type] = {'upstream': 0, 'downstream': 0}
+    
+    # Calculate mean probabilities from per-larva data
+    mean_probabilities = {}
+    sem_probabilities = {}  # Standard error of mean
+    for cast_type in ['small', 'large', 'all']:
+        up_probs = np.array(larva_probabilities[cast_type]['upstream'])
+        down_probs = np.array(larva_probabilities[cast_type]['downstream'])
         
-        # Plot bend angle between tail-to-center and center-to-head
-        ax2 = fig.add_subplot(gs[i, 1])
-        ax2.plot(t_window, bend_angle_window, 'g-')
-        
-        # Highlight cast period
-        if len(cast_times) > 0:
-            ax2.axvspan(cast_times[0], cast_times[-1], alpha=0.2, color='red')
-        
-        ax2.set_ylabel('Bend angle (°)\n(tail-center-head)')
-        if i == n_events - 1:
-            ax2.set_xlabel('Time (s)')
+        if len(up_probs) > 0:
+            mean_probabilities[cast_type] = {
+                'upstream': np.mean(up_probs),
+                'downstream': np.mean(down_probs)
+            }
+            sem_probabilities[cast_type] = {
+                'upstream': np.std(up_probs) / np.sqrt(len(up_probs)) if len(up_probs) > 1 else 0,
+                'downstream': np.std(down_probs) / np.sqrt(len(down_probs)) if len(down_probs) > 1 else 0
+            }
         else:
-            ax2.set_xticklabels([])
+            mean_probabilities[cast_type] = {'upstream': 0, 'downstream': 0}
+            sem_probabilities[cast_type] = {'upstream': 0, 'downstream': 0}
+    
+    # Statistical tests for each cast type
+    stats_results = {}
+    for cast_type in ['small', 'large', 'all']:
+        # Chi-square on raw counts
+        observed = np.array([total_counts[cast_type]['upstream'], total_counts[cast_type]['downstream']])
+        if np.sum(observed) > 0:
+            expected = np.sum(observed) / 2  # Expected equal distribution
+            chi2, p_chi2 = stats.chisquare(observed)
+        else:
+            chi2, p_chi2 = None, None
         
-        # Add event details as title
-        duration_sec = (time[end] - time[start])
-        ax1.set_title(f'Event {i+1}: Duration = {duration_sec:.2f}s')
+        # Paired t-test on larva probabilities
+        up_probs = np.array(larva_probabilities[cast_type]['upstream'])
+        down_probs = np.array(larva_probabilities[cast_type]['downstream'])
+        
+        if len(up_probs) > 1:
+            t_stat, p_val = stats.ttest_rel(up_probs, down_probs)
+        else:
+            t_stat, p_val = None, None
+            
+        stats_results[cast_type] = {
+            'chi2_result': (chi2, p_chi2) if chi2 is not None else None,
+            'ttest_result': (t_stat, p_val) if t_stat is not None else None
+        }
+    
+    # Create figures for the per-larva analysis
+    plot_types = []
+    for cast_type in ['all', 'large', 'small']:  # Order changed to put 'all' first
+        if len(larva_probabilities[cast_type]['upstream']) > 0:
+            plot_types.append(cast_type)
+    
+    # 1. First figure: standard box plots for each cast type
+    fig, axes = plt.subplots(1, len(plot_types), figsize=(3 * len(plot_types), 4))
+    
+    # Handle case where only one subplot is created
+    if len(plot_types) == 1:
+        axes = [axes]
+    
+    # Create each box plot
+    for i, cast_type in enumerate(plot_types):
+        ax = axes[i]
+        
+        # Get data for this cast type
+        data = [larva_probabilities[cast_type]['upstream'], 
+                larva_probabilities[cast_type]['downstream']]
+        
+        # Create box plot - use consistent color scheme
+        bp = ax.boxplot(data, positions=[0, 1], labels=['Upstream', 'Downstream'], 
+                       notch=True, patch_artist=True,
+                       widths=0.4, showfliers=True)
+        
+        # Customize colors - use same color for all box plots
+        for box in bp['boxes']:
+            box.set_facecolor('lightgray')
+            box.set_alpha(0.8)
+        
+        # Add individual data points with jitter
+        for j, d in enumerate(data):
+            if len(d) > 0:
+                pos = j
+                jitter = np.random.normal(0, 0.02, size=len(d))
+                ax.scatter(np.full_like(d, pos) + jitter, d,
+                          alpha=0.5, color='black', s=20)
+        
+        # Add significance bar if p-value is significant
+        p_val = stats_results[cast_type]['ttest_result'][1] if stats_results[cast_type]['ttest_result'] else None
+        if p_val is not None:
+            # Get y positions
+            y_max = max(max(data[0]) if len(data[0]) > 0 else 0, 
+                        max(data[1]) if len(data[1]) > 0 else 0) + 0.05
+            
+            # Plot the line
+            x1, x2 = 0, 1
+            ax.plot([x1, x1, x2, x2], [y_max, y_max + 0.03, y_max + 0.03, y_max], lw=1.5, c='black')
+            
+            # Add stars based on significance level
+            sig_str = ""
+            if p_val < 0.05:
+                sig_str = "*" 
+                if p_val < 0.01:
+                    sig_str = "**"
+                    if p_val < 0.001:
+                        sig_str = "***"
+            
+            ax.text((x1 + x2) * 0.5, y_max + 0.04, sig_str, ha='center', va='bottom', color='black', fontsize=14)
+            
+            # Add p-value with * indicator of significance
+            sig_indicator = "*" if p_val < 0.05 else "n.s."
+            ax.text((x1 + x2) * 0.5, y_max + 0.07, f'p = {p_val:.4f} ({sig_indicator})', ha='center', va='bottom', fontsize=8)
+        
+        # Add reference line for 0.5 probability (chance level)
+        ax.axhline(y=0.5, color='black', linestyle='--', alpha=0.3)
+        
+        # Add raw counts as text on plot
+        ax.text(0, 0.05, f'n = {total_counts[cast_type]["upstream"]}', ha='center', fontsize=8)
+        ax.text(1, 0.05, f'n = {total_counts[cast_type]["downstream"]}', ha='center', fontsize=8)
+        
+        # Format plot
+        if i == 0:
+            ax.set_ylabel('Probability', fontsize=10)
+        
+        # Increase y-axis limit to make room for p-values and significance bars
+        ax.set_ylim(0, 1.2)  # Increased from 1.1 to 1.2
+        
+        # Add type label as title
+        type_labels = {
+            'large': 'Large Casts',
+            'small': 'Small Casts',
+            'all': 'All Casts'
+        }
+        
+        ax.set_title(f'{type_labels[cast_type]}\n(n={len(larva_probabilities[cast_type]["upstream"])} larvae)', 
+                   fontsize=10)
+        
+        # Calculate and display median instead of mean
+        if len(data[0]) > 0:
+            upstream_median = np.median(data[0])
+            upstream_std = np.std(data[0])
+            ax.text(0, upstream_median + 0.03, f"Median: {upstream_median:.2f}", 
+                  ha='center', va='bottom', fontsize=9, fontweight='bold')
+            ax.text(0, upstream_median - 0.12, f"Std: {upstream_std:.2f}", 
+                  ha='center', va='bottom', fontsize=8)
+        
+        if len(data[1]) > 0:
+            downstream_median = np.median(data[1])
+            downstream_std = np.std(data[1])
+            ax.text(1, downstream_median + 0.03, f"Median: {downstream_median:.2f}", 
+                  ha='center', va='bottom', fontsize=9, fontweight='bold')
+            ax.text(1, downstream_median - 0.12, f"Std: {downstream_std:.2f}", 
+                  ha='center', va='bottom', fontsize=8)
+    
+    # Add super title
+    fig.suptitle(f'Cast Direction When Perpendicular to Flow (±{angle_width}°)', 
+              fontsize=12)
     
     plt.tight_layout()
-    plt.suptitle(f"Cast Angle Dynamics - Larva {larva_id}", y=1.02, fontsize=14)
+    plt.subplots_adjust(top=0.85, wspace=0.3)  # Make room for the suptitle
     plt.show()
-    
-    # Compute statistics
-    all_durations = [(time[end] - time[start]) for start, end in cast_events]
-    max_angle_du = []
-    max_bend_angle = []
-    angle_amplitude_du = []  # Range of angles during cast
-    bend_amplitude = []
-    
-    for start, end in cast_events:
-        du_during_cast = angle_downer_upper_deg[start:end]
-        bend_during_cast = bend_angle[start:end]
-        
-        if len(du_during_cast) > 0 and len(bend_during_cast) > 0:
-            max_angle_du.append(np.max(np.abs(du_during_cast)))
-            max_bend_angle.append(np.max(bend_during_cast))
-            
-            # Calculate range/amplitude of angles during cast
-            angle_amplitude_du.append(np.max(du_during_cast) - np.min(du_during_cast))
-            bend_amplitude.append(np.max(bend_during_cast) - np.min(bend_during_cast))
-    
-    # Return statistics
-    return {
-        'larva_id': larva_id,
-        'n_events': len(cast_events),
-        'event_durations': all_durations,
-        'mean_duration': np.mean(all_durations) if all_durations else None,
-        'max_angle_du': max_angle_du,
-        'max_bend_angle': max_bend_angle,
-        'mean_max_angle_du': np.mean(max_angle_du) if max_angle_du else None,
-        'mean_max_bend_angle': np.mean(max_bend_angle) if max_bend_angle else None,
-        'mean_angle_amplitude_du': np.mean(angle_amplitude_du) if angle_amplitude_du else None,
-        'mean_bend_amplitude': np.mean(bend_amplitude) if bend_amplitude else None
-    }
 
+    if basepath is not None:
+        # Create filename with angle width and timestamp
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filepath = os.path.join(basepath, f"perpendicular_cast_boxplot_angle{angle_width}_{timestamp}.svg")
+        plt.savefig(filepath, format='svg', bbox_inches='tight')
+        print(f"Saved boxplot to: {filepath}")
+    
+    # 2. Second figure: per-larva bar plots for cast types
+    if len(plot_types) > 0:
+        fig, axes = plt.subplots(len(plot_types), 1, figsize=(8, 3 * len(plot_types)))
+        
+        # Handle case where only one subplot is created
+        if len(plot_types) == 1:
+            axes = [axes]
+        
+        # Process each cast type
+        for i, cast_type in enumerate(plot_types):
+            ax = axes[i]
+            
+            # Find number of larvae with data
+            n_larvae_with_data = len(per_larva_counts[cast_type]['larva_ids'])
+            
+            if n_larvae_with_data > 0:
+                # Calculate downstream probability for each larva and store with other data
+                larva_data = []
+                for j in range(n_larvae_with_data):
+                    up = per_larva_counts[cast_type]['upstream'][j]
+                    down = per_larva_counts[cast_type]['downstream'][j]
+                    total = per_larva_counts[cast_type]['total'][j]
+                    down_prob = down / total
+                    
+                    larva_data.append({
+                        'id': per_larva_counts[cast_type]['larva_ids'][j],
+                        'upstream': up,
+                        'downstream': down,
+                        'total': total,
+                        'downstream_prob': down_prob
+                    })
+                
+                # Sort by downstream probability (ascending)
+                sorted_larvae = sorted(larva_data, key=lambda x: x['downstream_prob'])
+                
+                # Create normalized stacked bar chart
+                larva_ids = [larva['id'] for larva in sorted_larvae]
+                upstream_normalized = [larva['upstream']/larva['total'] for larva in sorted_larvae]
+                downstream_normalized = [larva['downstream']/larva['total'] for larva in sorted_larvae]
+                
+                # Create positions
+                y_pos = np.arange(len(larva_ids))
+                
+                # Create normalized stacked bar chart
+                ax.barh(y_pos, upstream_normalized, color='green', alpha=0.7, label='Upstream')
+                ax.barh(y_pos, downstream_normalized, left=upstream_normalized, color='orange', alpha=0.7, label='Downstream')
+                
+                # Add downstream probability as text
+                for j, larva in enumerate(sorted_larvae):
+                    ax.text(1.02, j, f"{larva['downstream_prob']*100:.0f}%", va='center', fontsize=8)
+                    
+                    # Add total count at the start of each bar
+                    ax.text(-0.05, j, f"{larva['total']}", va='center', ha='right', fontsize=8)
+                
+                # Mark 50% line
+                ax.axvline(x=0.5, color='black', linestyle='--', alpha=0.3)
+                
+                # Format plot
+                ax.set_yticks(y_pos)
+                ax.set_yticklabels(larva_ids)
+                ax.set_xlim(0, 1.15)  # Make room for percentage labels
+                
+                # Add labels
+                if i == len(plot_types) - 1:
+                    ax.set_xlabel('Proportion of Casts')
+                
+                ax.set_ylabel('Larva ID')
+                
+                # Add type label as title
+                type_labels = {
+                    'large': 'Large Casts',
+                    'small': 'Small Casts',
+                    'all': 'All Casts'
+                }
+                
+                # Add type label title with annotations for number of larvae and casts
+                total_casts = sum(larva['total'] for larva in sorted_larvae)
+                ax.set_title(f'{type_labels[cast_type]} - Per Larva Breakdown (n={n_larvae_with_data} larvae, {total_casts} casts)', 
+                           fontsize=10)
+                
+                # Add legend if this is the first subplot
+                if i == 0:
+                    ax.legend(loc='upper center', bbox_to_anchor=(0.5, 1.15), 
+                             ncol=2, frameon=False)
+        
+        plt.tight_layout()
+        plt.subplots_adjust(hspace=0.3)
+        plt.show()
+
+        
+    
+    # Print summary of statistical results
+    print("\nSummary of Cast Direction Analysis:")
+    print(f"Analyzed {larvae_processed} larvae with cast events during perpendicular orientation (±{angle_width}°)")
+    
+    for cast_type in ['all', 'large', 'small']:
+        if cast_type in plot_types:
+            print(f"\n{cast_type.capitalize()} Casts:")
+            n_up = total_counts[cast_type]['upstream']
+            n_down = total_counts[cast_type]['downstream']
+            total = n_up + n_down
+            
+            if total > 0:
+                up_pct = (n_up / total) * 100
+                down_pct = (n_down / total) * 100
+                
+                print(f"  Total: {total} casts from {len(larva_probabilities[cast_type]['upstream'])} larvae")
+                print(f"  Upstream: {n_up} ({up_pct:.1f}%), Downstream: {n_down} ({down_pct:.1f}%)")
+                
+                # Add mean and standard deviation information
+                up_probs = np.array(larva_probabilities[cast_type]['upstream'])
+                down_probs = np.array(larva_probabilities[cast_type]['downstream'])
+                
+                if len(up_probs) > 0:
+                    up_mean = np.mean(up_probs)
+                    up_std = np.std(up_probs)
+                    down_mean = np.mean(down_probs)
+                    down_std = np.std(down_probs)
+                    
+                    print(f"  Upstream mean: {up_mean:.3f} ± {up_std:.3f} (std)")
+                    print(f"  Downstream mean: {down_mean:.3f} ± {down_std:.3f} (std)")
+                    
+                    # Also print median values for comparison
+                    up_median = np.median(up_probs)
+                    down_median = np.median(down_probs)
+                    print(f"  Upstream median: {up_median:.3f}")
+                    print(f"  Downstream median: {down_median:.3f}")
+                
+                # Chi-square test result
+                chi2_result = stats_results[cast_type]['chi2_result']
+                if chi2_result is not None:
+                    chi2, p_val = chi2_result
+                    sig_str = "significant" if p_val < 0.05 else "not significant"
+                    print(f"  Chi-Square Test: χ² = {chi2:.2f}, p = {p_val:.4f} ({sig_str})")
+                
+                # T-test result
+                ttest_result = stats_results[cast_type]['ttest_result']
+                if ttest_result is not None:
+                    t_stat, p_val = ttest_result
+                    sig_str = "significant" if p_val < 0.05 else "not significant"
+                    print(f"  Paired T-Test: t = {t_stat:.2f}, p = {p_val:.4f} ({sig_str})")
+    
+    # Return comprehensive results
+    return {
+        'total_counts': total_counts,
+        'probabilities': probabilities,
+        'mean_probabilities': mean_probabilities,
+        'sem_probabilities': sem_probabilities,
+        'larva_probabilities': larva_probabilities,
+        'per_larva_counts': per_larva_counts,
+        'stats_results': stats_results,
+        'larvae_processed': larvae_processed,
+        'total_larvae': n_larvae,
+        'angle_width': angle_width
+    }
 
 def plot_larva_angle_dynamics(trx_data, larva_id=None, smooth_window=5, highlight_peaks=True, peak_prominence=None, peak_distance=20):
     """
@@ -5577,4 +5976,2195 @@ def analyze_cast_head_angles_by_orientation(trx_data, larva_id=None, bin_width=1
         'n_large_casts': len(large_cast_angles),
         'n_small_casts': len(small_cast_angles),
         'n_all_casts': len(all_cast_angles)
+    }
+
+
+
+def compare_genotype_distributions_by_date():
+    """
+    Compare orientation distributions for runs and casts across different genotypes,
+    analyzing each experiment date separately. Automatically detects available dates.
+    """
+    # Define genotype paths to analyze
+    genotype_paths = {
+        "SS01948": "/Users/sharbat/Projects/anemotaxis/data/GMR_SS01948@UAS_TNT_2_0003/p_5gradient2_2s1x600s0s#n#n#n",
+        "SS01757": "/Users/sharbat/Projects/anemotaxis/data/GMR_SS01757@UAS_TNT_2_0003/p_5gradient2_2s1x600s0s#n#n#n",
+        "control": "/Users/sharbat/Projects/anemotaxis/data/FCF_attP2-40@UAS_TNT_2_0003/p_5gradient2_2s1x600s0s#n#n#n",
+    }
+    
+    # Automatically discover experiment dates for each genotype
+    experiment_dates = {}
+    for genotype, base_path in genotype_paths.items():
+        # Find all subdirectories with trx.mat files
+        date_dirs = []
+        for root, dirs, files in os.walk(base_path):
+            for file in files:
+                if file == "trx.mat":
+                    # Extract date directory name (immediate parent of trx.mat)
+                    date_dir = os.path.basename(root)
+                    date_dirs.append(date_dir)
+        
+        # Store unique, sorted date directories
+        experiment_dates[genotype] = sorted(list(set(date_dirs)))
+        print(f"Found {len(experiment_dates[genotype])} experiment dates for {genotype}")
+    
+    # Storage for results - structure: genotype -> date -> results
+    genotype_date_results = {}
+    
+    # Define color maps for each genotype and line styles for dates
+    genotype_colors = {
+        "SS01948": "blue",
+        "SS01757": "red",
+        "control": "green"
+    }
+    
+    # Define line styles based on the number of dates we have
+    max_dates = max([len(dates) for dates in experiment_dates.values()])
+    line_styles = [
+        ("-", 1.5),    # Solid thick
+        ("--", 1.5),   # Dashed thick
+        (":", 1.8),    # Dotted thick
+        ("-.", 1.5),   # Dash-dot thick
+        ("-", 1.0),    # Solid thin
+        ("--", 1.0),   # Dashed thin
+        (":", 1.2),    # Dotted thin
+        ("-.", 1.0)    # Dash-dot thin
+    ]
+    
+    # Ensure we have enough line styles
+    while len(line_styles) < max_dates:
+        line_styles.extend(line_styles[:4])
+    
+    # Create date_styles mapping
+    date_styles = {}
+    for genotype, dates in experiment_dates.items():
+        for i, date in enumerate(dates):
+            date_styles[date] = line_styles[i]
+    
+    # Process each genotype
+    for genotype, base_path in genotype_paths.items():
+        print(f"Processing genotype: {genotype}")
+        genotype_date_results[genotype] = {}
+        
+        # Process each experiment date for this genotype
+        for date in experiment_dates[genotype]:
+            try:
+                trx_path = os.path.join(base_path, date, "trx.mat")
+                print(f"  Loading {trx_path}")
+                
+                # Check if file exists
+                if not os.path.exists(trx_path):
+                    print(f"  File not found: {trx_path}")
+                    continue
+                
+                # Load and process data using the correct function names
+                processed_data = process_single_file(trx_path)
+                
+                # Apply filters
+                filtered_data = filter_larvae_by_duration(processed_data, 
+                                                             min_total_duration=300)
+                
+                if not filtered_data or len(filtered_data["larvae"]) == 0:
+                    print(f"  No larvae passed filters for {date}")
+                    continue
+                
+                num_larvae = len(filtered_data["larvae"])
+                print(f"  {num_larvae} larvae passed filters for {date}")
+                
+                # Analyze run orientations
+                run_results = analyze_run_orientations_all(filtered_data)
+                
+                # Analyze cast orientations
+                cast_results = analyze_cast_orientations_all(filtered_data)
+                
+                # Store the results for this date
+                genotype_date_results[genotype][date] = {
+                    "run_results": run_results,
+                    "cast_results": cast_results,
+                    "n_larvae": num_larvae
+                }
+                
+                print(f"  Completed analysis for {genotype}, {date} with {num_larvae} larvae")
+                
+            except Exception as e:
+                print(f"  Error processing {genotype}, {date}: {str(e)}")
+                continue
+    
+    # Check if we have enough data to compare
+    if not any(genotype_date_results.values()):
+        print("No data available to compare")
+        return genotype_date_results
+    
+    # Combine the dates within each genotype for a genotype summary plot
+    genotype_combined_results = {}
+    for genotype, date_results in genotype_date_results.items():
+        if not date_results:  # Skip empty results
+            continue
+            
+        # Initialize combined arrays
+        large_cast_orientations = []
+        small_cast_orientations = []
+        all_cast_orientations = []
+        large_run_orientations = []
+        small_run_orientations = []
+        all_run_orientations = []
+        total_larvae = 0
+        
+        # Combine data from all dates for this genotype
+        for date, results in date_results.items():
+            # Add cast data
+            if 'cast_results' in results:
+                large_cast_orientations.extend(results['cast_results'].get('large_cast_orientations', []))
+                small_cast_orientations.extend(results['cast_results'].get('small_cast_orientations', []))
+                all_cast_orientations.extend(results['cast_results'].get('all_cast_orientations', []))
+            
+            # Add run data
+            if 'run_results' in results:
+                large_run_orientations.extend(results['run_results'].get('large_run_orientations', []))
+                small_run_orientations.extend(results['run_results'].get('small_run_orientations', []))
+                all_run_orientations.extend(results['run_results'].get('all_run_orientations', []))
+            
+            # Track larvae count
+            total_larvae += results.get('n_larvae', 0)
+        
+        # Calculate combined histograms and smoothed data
+        bins = np.linspace(-180, 180, 37)  # 36 bins
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+        
+        # Casts
+        if len(all_cast_orientations) > 0:
+            cast_hist = np.histogram(all_cast_orientations, bins=bins, density=True)[0]
+            cast_smoothed = gaussian_filter1d(cast_hist, sigma=1)
+        else:
+            cast_hist = np.zeros(36)
+            cast_smoothed = np.zeros(36)
+        
+        # Runs
+        if len(all_run_orientations) > 0:
+            run_hist = np.histogram(all_run_orientations, bins=bins, density=True)[0]
+            run_smoothed = gaussian_filter1d(run_hist, sigma=1)
+        else:
+            run_hist = np.zeros(36)
+            run_smoothed = np.zeros(36)
+        
+        # Store combined results
+        genotype_combined_results[genotype] = {
+            'cast_hist': cast_hist,
+            'cast_smoothed': cast_smoothed,
+            'run_hist': run_hist,
+            'run_smoothed': run_smoothed,
+            'bin_centers': bin_centers,
+            'total_larvae': total_larvae,
+            'n_casts': len(all_cast_orientations),
+            'n_runs': len(all_run_orientations)
+        }
+    
+    # Skip plots if no combined results
+    if not genotype_combined_results:
+        print("No combined results available to plot")
+        return genotype_date_results
+    
+    # Create genotype comparison plots
+    # 1. Run Orientations
+    plt.figure(figsize=(8, 6))
+    for genotype, results in genotype_combined_results.items():
+        if results['n_runs'] > 0:
+            plt.plot(results['bin_centers'], results['run_smoothed'], 
+                     color=genotype_colors.get(genotype, 'black'), linewidth=2.5,
+                     label=f"{genotype} (n={results['total_larvae']} larvae, {results['n_runs']} runs)")
+    
+    plt.xlabel('Body Orientation (°)', fontsize=12)
+    plt.ylabel('Relative Probability', fontsize=12)
+    plt.xlim(-180, 180)
+    plt.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=180, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=-180, color='gray', linestyle='--', alpha=0.3)
+    plt.title('Run Orientation Distribution Comparison by Genotype', fontsize=14)
+    plt.legend(fontsize=10)
+    plt.tight_layout()
+    plt.savefig('run_orientation_genotype_comparison.png', dpi=300)
+    plt.show()
+    
+    # 2. Cast Orientations
+    plt.figure(figsize=(8, 6))
+    for genotype, results in genotype_combined_results.items():
+        if results['n_casts'] > 0:
+            plt.plot(results['bin_centers'], results['cast_smoothed'], 
+                     color=genotype_colors.get(genotype, 'black'), linewidth=2.5,
+                     label=f"{genotype} (n={results['total_larvae']} larvae, {results['n_casts']} casts)")
+    
+    plt.xlabel('Body Orientation (°)', fontsize=12)
+    plt.ylabel('Relative Probability', fontsize=12)
+    plt.xlim(-180, 180)
+    plt.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=180, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=-180, color='gray', linestyle='--', alpha=0.3)
+    plt.title('Cast Orientation Distribution Comparison by Genotype', fontsize=14)
+    plt.legend(fontsize=10)
+    plt.tight_layout()
+    plt.savefig('cast_orientation_genotype_comparison.png', dpi=300)
+    plt.show()
+    
+    # Create plots comparing run orientations with all dates
+    plt.figure(figsize=(12, 8))
+    
+    # Custom legend elements
+    genotype_legend_elements = [Line2D([0], [0], color=color, lw=2, label=genotype) 
+                               for genotype, color in genotype_colors.items() 
+                               if genotype in genotype_date_results and genotype_date_results[genotype]]
+    
+    # Store bin centers for x-axis
+    bin_centers = None
+    
+    # Plot run orientation distributions for each genotype and date
+    for genotype, date_results in genotype_date_results.items():
+        for date, results in date_results.items():
+            if 'run_results' not in results:
+                continue
+                
+            run_data = results["run_results"]
+            
+            # Get line style for this date
+            linestyle, linewidth = date_styles.get(date, ('-', 1.0))
+            
+            # Store bin centers from first result for x-axis
+            if bin_centers is None and 'bin_centers' in run_data:
+                bin_centers = run_data["bin_centers"]
+            
+            if 'smoothed_all' in run_data and len(run_data['smoothed_all']) > 0:
+                plt.plot(run_data["bin_centers"], run_data["smoothed_all"], 
+                        color=genotype_colors.get(genotype, 'black'),
+                        linestyle=linestyle, linewidth=linewidth,
+                        label=f"{genotype}, {date} (n={results['n_larvae']})")
+    
+    plt.xlabel('Body Orientation (°)', fontsize=12)
+    plt.ylabel('Relative Probability', fontsize=12)
+    plt.xlim(-180, 180)
+    plt.title('Run Orientation Distribution Comparison by Genotype and Date', fontsize=14)
+    plt.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=180, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=-180, color='gray', linestyle='--', alpha=0.3)
+    
+    # Create a legend for genotypes
+    if genotype_legend_elements:
+        plt.legend(handles=genotype_legend_elements, loc='upper left', 
+                  title="Genotype", bbox_to_anchor=(1.02, 1))
+        
+        # Add date legend as text
+        date_text = []
+        for i, (date, style) in enumerate(date_styles.items()):
+            date_text.append(f"{date}: {style[0]}")
+        
+        plt.figtext(0.98, 0.6, "\n".join(date_text), va="top", ha="right", 
+                   bbox=dict(boxstyle="round", fc="w", ec="k", alpha=0.8))
+    
+    plt.tight_layout()
+    plt.savefig('run_orientation_by_date_comparison.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    # Create plots comparing cast orientations
+    plt.figure(figsize=(12, 8))
+    
+    # Plot cast orientation distributions for each genotype and date
+    for genotype, date_results in genotype_date_results.items():
+        for date, results in date_results.items():
+            if 'cast_results' not in results:
+                continue
+                
+            cast_data = results["cast_results"]
+            
+            # Get line style for this date
+            linestyle, linewidth = date_styles.get(date, ('-', 1.0))
+            
+            if 'smoothed_all' in cast_data and len(cast_data['smoothed_all']) > 0:
+                plt.plot(cast_data["bin_centers"], cast_data["smoothed_all"], 
+                        color=genotype_colors.get(genotype, 'black'),
+                        linestyle=linestyle, linewidth=linewidth,
+                        label=f"{genotype}, {date} (n={results['n_larvae']})")
+    
+    plt.xlabel('Body Orientation (°)', fontsize=12)
+    plt.ylabel('Relative Probability', fontsize=12)
+    plt.xlim(-180, 180)
+    plt.title('Cast Orientation Distribution Comparison by Genotype and Date', fontsize=14)
+    plt.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=180, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=-180, color='gray', linestyle='--', alpha=0.3)
+    
+    # Create a legend for genotypes
+    if genotype_legend_elements:
+        plt.legend(handles=genotype_legend_elements, loc='upper left', 
+                  title="Genotype", bbox_to_anchor=(1.02, 1))
+    
+    plt.tight_layout()
+    plt.savefig('cast_orientation_by_date_comparison.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    # Find all unique dates across genotypes to create date-specific comparisons
+    all_dates = set()
+    for dates_dict in experiment_dates.values():
+        all_dates.update(dates_dict)
+    all_dates = sorted(list(all_dates))
+    
+    # Run comparisons for each date
+    for date in all_dates:
+        genotypes_with_data = []
+        for genotype in genotype_paths.keys():
+            if (genotype in genotype_date_results and 
+                date in genotype_date_results[genotype] and
+                'run_results' in genotype_date_results[genotype][date] and
+                'cast_results' in genotype_date_results[genotype][date]):
+                genotypes_with_data.append(genotype)
+        
+        if len(genotypes_with_data) < 2:
+            print(f"Not enough genotypes with data for date {date}")
+            continue
+        
+        # Create figure with two subplots (run and cast)
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # Plot run orientations for this date
+        ax1.set_title(f'Run Orientations - {date}', fontsize=14)
+        for genotype in genotypes_with_data:
+            results = genotype_date_results[genotype][date]
+            run_data = results["run_results"]
+            
+            if 'smoothed_all' in run_data and len(run_data['smoothed_all']) > 0:
+                ax1.plot(run_data["bin_centers"], run_data["smoothed_all"], 
+                       color=genotype_colors.get(genotype, 'black'), linewidth=2,
+                       label=f"{genotype} (n={results['n_larvae']})")
+        
+        ax1.set_xlabel('Body Orientation (°)', fontsize=12)
+        ax1.set_ylabel('Relative Probability', fontsize=12)
+        ax1.set_xlim(-180, 180)
+        ax1.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+        ax1.axvline(x=180, color='gray', linestyle='--', alpha=0.3)
+        ax1.axvline(x=-180, color='gray', linestyle='--', alpha=0.3)
+        ax1.legend()
+        
+        # Plot cast orientations for this date
+        ax2.set_title(f'Cast Orientations - {date}', fontsize=14)
+        for genotype in genotypes_with_data:
+            results = genotype_date_results[genotype][date]
+            cast_data = results["cast_results"]
+            
+            if 'smoothed_all' in cast_data and len(cast_data['smoothed_all']) > 0:
+                ax2.plot(cast_data["bin_centers"], cast_data["smoothed_all"], 
+                       color=genotype_colors.get(genotype, 'black'), linewidth=2,
+                       label=f"{genotype} (n={results['n_larvae']})")
+        
+        ax2.set_xlabel('Body Orientation (°)', fontsize=12)
+        ax2.set_ylabel('Relative Probability', fontsize=12)
+        ax2.set_xlim(-180, 180)
+        ax2.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+        ax2.axvline(x=180, color='gray', linestyle='--', alpha=0.3)
+        ax2.axvline(x=-180, color='gray', linestyle='--', alpha=0.3)
+        ax2.legend()
+        
+        plt.tight_layout()
+        plt.savefig(f'orientation_comparison_{date}.png', dpi=300)
+        plt.show()
+    
+    # Statistical comparisons by date
+    print("\nStatistical Comparisons by Date:")
+    
+    for date in all_dates:
+        genotypes_with_data = []
+        for genotype in genotype_paths.keys():
+            if (genotype in genotype_date_results and 
+                date in genotype_date_results[genotype] and
+                'run_results' in genotype_date_results[genotype][date] and
+                'cast_results' in genotype_date_results[genotype][date]):
+                genotypes_with_data.append(genotype)
+        
+        if len(genotypes_with_data) < 2:
+            continue
+        
+        print(f"\nComparisons for date: {date}")
+        
+        # Run comparisons
+        print("  Run Orientation Distribution:")
+        for i in range(len(genotypes_with_data)):
+            for j in range(i+1, len(genotypes_with_data)):
+                g1 = genotypes_with_data[i]
+                g2 = genotypes_with_data[j]
+                
+                # Get the raw orientation data
+                try:
+                    runs_g1 = genotype_date_results[g1][date]["run_results"]["all_run_orientations"]
+                    runs_g2 = genotype_date_results[g2][date]["run_results"]["all_run_orientations"]
+                    
+                    # Ensure both arrays have elements before running KS test
+                    if len(runs_g1) > 0 and len(runs_g2) > 0:
+                        # Kolmogorov-Smirnov test
+                        ks_stat, p_value = ks_2samp(runs_g1, runs_g2)
+                        
+                        print(f"    {g1} vs {g2}: KS statistic = {ks_stat:.4f}, p-value = {p_value:.6f}")
+                        if p_value < 0.05:
+                            print(f"      Significant difference detected (p < 0.05)")
+                    else:
+                        print(f"    {g1} vs {g2}: Insufficient data for statistical comparison")
+                except (KeyError, ValueError) as e:
+                    print(f"    {g1} vs {g2}: Error in data comparison - {str(e)}")
+        
+        # Cast comparisons
+        print("  Cast Orientation Distribution:")
+        for i in range(len(genotypes_with_data)):
+            for j in range(i+1, len(genotypes_with_data)):
+                g1 = genotypes_with_data[i]
+                g2 = genotypes_with_data[j]
+                
+                # Get the raw orientation data
+                try:
+                    casts_g1 = genotype_date_results[g1][date]["cast_results"]["all_cast_orientations"]
+                    casts_g2 = genotype_date_results[g2][date]["cast_results"]["all_cast_orientations"]
+                    
+                    # Ensure both arrays have elements before running KS test
+                    if len(casts_g1) > 0 and len(casts_g2) > 0:
+                        # Kolmogorov-Smirnov test
+                        ks_stat, p_value = ks_2samp(casts_g1, casts_g2)
+                        
+                        print(f"    {g1} vs {g2}: KS statistic = {ks_stat:.4f}, p-value = {p_value:.6f}")
+                        if p_value < 0.05:
+                            print(f"      Significant difference detected (p < 0.05)")
+                    else:
+                        print(f"    {g1} vs {g2}: Insufficient data for statistical comparison")
+                except (KeyError, ValueError) as e:
+                    print(f"    {g1} vs {g2}: Error in data comparison - {str(e)}")
+    
+    # Statistical comparisons for combined genotype data
+    print("\nStatistical Comparisons for Combined Genotype Data:")
+    
+    # Compare run distributions
+    print("\nRun Orientation Distribution Comparisons (all dates combined):")
+    genotypes = list(genotype_combined_results.keys())
+    for i in range(len(genotypes)):
+        for j in range(i+1, len(genotypes)):
+            g1 = genotypes[i]
+            g2 = genotypes[j]
+            
+            # Get all run orientations from all dates for each genotype
+            runs_g1 = []
+            runs_g2 = []
+            
+            for date, results in genotype_date_results.get(g1, {}).items():
+                if 'run_results' in results and 'all_run_orientations' in results['run_results']:
+                    runs_g1.extend(results["run_results"]["all_run_orientations"])
+                
+            for date, results in genotype_date_results.get(g2, {}).items():
+                if 'run_results' in results and 'all_run_orientations' in results['run_results']:
+                    runs_g2.extend(results["run_results"]["all_run_orientations"])
+            
+            # Kolmogorov-Smirnov test
+            if len(runs_g1) > 0 and len(runs_g2) > 0:
+                ks_stat, p_value = ks_2samp(runs_g1, runs_g2)
+                
+                print(f"  {g1} vs {g2}: KS statistic = {ks_stat:.4f}, p-value = {p_value:.6f}")
+                print(f"    {g1}: {len(runs_g1)} runs, {g2}: {len(runs_g2)} runs")
+                if p_value < 0.05:
+                    print(f"    Significant difference detected (p < 0.05)")
+            else:
+                print(f"  {g1} vs {g2}: Insufficient data for statistical comparison")
+    
+    # Compare cast distributions
+    print("\nCast Orientation Distribution Comparisons (all dates combined):")
+    for i in range(len(genotypes)):
+        for j in range(i+1, len(genotypes)):
+            g1 = genotypes[i]
+            g2 = genotypes[j]
+            
+            # Get all cast orientations from all dates for each genotype
+            casts_g1 = []
+            casts_g2 = []
+            
+            for date, results in genotype_date_results.get(g1, {}).items():
+                if 'cast_results' in results and 'all_cast_orientations' in results['cast_results']:
+                    casts_g1.extend(results["cast_results"]["all_cast_orientations"])
+                
+            for date, results in genotype_date_results.get(g2, {}).items():
+                if 'cast_results' in results and 'all_cast_orientations' in results['cast_results']:
+                    casts_g2.extend(results["cast_results"]["all_cast_orientations"])
+            
+            # Kolmogorov-Smirnov test
+            if len(casts_g1) > 0 and len(casts_g2) > 0:
+                ks_stat, p_value = ks_2samp(casts_g1, casts_g2)
+                
+                print(f"  {g1} vs {g2}: KS statistic = {ks_stat:.4f}, p-value = {p_value:.6f}")
+                print(f"    {g1}: {len(casts_g1)} casts, {g2}: {len(casts_g2)} casts")
+                if p_value < 0.05:
+                    print(f"    Significant difference detected (p < 0.05)")
+            else:
+                print(f"  {g1} vs {g2}: Insufficient data for statistical comparison")
+    
+    return genotype_date_results
+
+
+def compare_cast_head_angles(dataset1, dataset2, labels=None, bin_width=10, basepath=None):
+    """
+    Compare head angle distributions during casts between two datasets and test for statistical differences.
+    
+    Args:
+        dataset1 (dict): First tracking data dictionary
+        dataset2 (dict): Second tracking data dictionary to compare with the first
+        labels (tuple): Optional tuple of (label1, label2) for the datasets
+        bin_width (int): Width of orientation bins in degrees
+        basepath (str): Optional base path to save output SVG files
+        
+    Returns:
+        dict: Contains comparison statistics and test results
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy import stats
+    from scipy.ndimage import gaussian_filter1d
+    import os
+    from datetime import datetime
+    
+    # Set default labels if not provided
+    if labels is None:
+        labels = ('Dataset 1', 'Dataset 2')
+    
+    # Analyze both datasets individually
+    print(f"Analyzing {labels[0]}...")
+    results1 = analyze_cast_head_angles_by_orientation(dataset1, bin_width=bin_width)
+    
+    print(f"Analyzing {labels[1]}...")
+    results2 = analyze_cast_head_angles_by_orientation(dataset2, bin_width=bin_width)
+    
+    # Extract key data for comparison
+    large_angles1 = results1['large_cast_angles']
+    small_angles1 = results1['small_cast_angles']
+    all_angles1 = results1['all_cast_angles']
+    
+    large_angles2 = results2['large_cast_angles']
+    small_angles2 = results2['small_cast_angles']
+    all_angles2 = results2['all_cast_angles']
+    
+    # Store statistical test results
+    stat_results = {}
+    
+    # Function to perform statistical tests
+    def perform_tests(data1, data2, name):
+        if len(data1) > 0 and len(data2) > 0:
+            # Kolmogorov-Smirnov test (non-parametric, distribution-free)
+            ks_stat, ks_pval = stats.ks_2samp(data1, data2)
+            
+            # Mann-Whitney U test (non-parametric, compares medians)
+            u_stat, u_pval = stats.mannwhitneyu(data1, data2, alternative='two-sided')
+            
+            # t-test (parametric, compares means)
+            t_stat, t_pval = stats.ttest_ind(data1, data2, equal_var=False)
+            
+            return {
+                'ks_test': {'statistic': ks_stat, 'pvalue': ks_pval},
+                'mannwhitney_test': {'statistic': u_stat, 'pvalue': u_pval},
+                't_test': {'statistic': t_stat, 'pvalue': t_pval},
+                'n_samples1': len(data1),
+                'n_samples2': len(data2),
+                'mean1': np.mean(data1),
+                'mean2': np.mean(data2),
+                'median1': np.median(data1),
+                'median2': np.median(data2),
+                'std1': np.std(data1),
+                'std2': np.std(data2)
+            }
+        else:
+            return None
+    
+    # Perform tests for all cast types
+    stat_results['large_casts'] = perform_tests(large_angles1, large_angles2, 'large casts')
+    stat_results['small_casts'] = perform_tests(small_angles1, small_angles2, 'small casts')
+    stat_results['all_casts'] = perform_tests(all_angles1, all_angles2, 'all casts')
+    
+    # Plot comparison of distributions
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+    
+    # Create histogram bins
+    angle_bins = np.linspace(-90, 90, 37)  # 36 bins covering -90° to 90°
+    angle_bin_centers = (angle_bins[:-1] + angle_bins[1:]) / 2
+    
+    # Function to plot histograms
+    def plot_hist_comparison(ax, data1, data2, title, color1='blue', color2='red'):
+        if len(data1) > 0 and len(data2) > 0:
+            # Calculate histograms
+            hist1, _ = np.histogram(data1, bins=angle_bins, density=True)
+            hist2, _ = np.histogram(data2, bins=angle_bins, density=True)
+            
+            # Smooth histograms
+            smoothed1 = gaussian_filter1d(hist1, sigma=1)
+            smoothed2 = gaussian_filter1d(hist2, sigma=1)
+            
+            # Plot histograms
+            ax.plot(angle_bin_centers, smoothed1, color=color1, linewidth=2, 
+                   label=f"{labels[0]} (n={len(data1)})")
+            ax.plot(angle_bin_centers, smoothed2, color=color2, linewidth=2, 
+                   label=f"{labels[1]} (n={len(data2)})")
+            
+            # Add statistical test results if available
+            test_results = stat_results.get(title.lower().replace(' ', '_'))
+            if test_results:
+                # Format p-values
+                ks_p = test_results['ks_test']['pvalue']
+                mw_p = test_results['mannwhitney_test']['pvalue']
+                t_p = test_results['t_test']['pvalue']
+                
+                # Add significance asterisks
+                ks_sig = '***' if ks_p < 0.001 else ('**' if ks_p < 0.01 else ('*' if ks_p < 0.05 else 'n.s.'))
+                mw_sig = '***' if mw_p < 0.001 else ('**' if mw_p < 0.01 else ('*' if mw_p < 0.05 else 'n.s.'))
+                t_sig = '***' if t_p < 0.001 else ('**' if t_p < 0.01 else ('*' if t_p < 0.05 else 'n.s.'))
+                
+                # Add text for statistical test results
+                text_y = ax.get_ylim()[1] * 0.9
+                ax.text(0.05, text_y, f"KS: p={ks_p:.4f} {ks_sig}", fontsize=9, ha='left')
+                ax.text(0.05, text_y * 0.9, f"MW: p={mw_p:.4f} {mw_sig}", fontsize=9, ha='left')
+                ax.text(0.05, text_y * 0.8, f"t-test: p={t_p:.4f} {t_sig}", fontsize=9, ha='left')
+                
+                # Add means with standard error
+                mean1 = test_results['mean1']
+                mean2 = test_results['mean2']
+                se1 = test_results['std1'] / np.sqrt(test_results['n_samples1'])
+                se2 = test_results['std2'] / np.sqrt(test_results['n_samples2'])
+                
+                ax.text(0.05, text_y * 0.7, f"{labels[0]}: {mean1:.2f}±{se1:.2f}°", fontsize=9, ha='left', color=color1)
+                ax.text(0.05, text_y * 0.6, f"{labels[1]}: {mean2:.2f}±{se2:.2f}°", fontsize=9, ha='left', color=color2)
+        
+        ax.set_xlabel('Head Angle (°)')
+        ax.set_ylabel('Probability Density')
+        ax.set_title(title)
+        ax.legend()
+        ax.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+    
+    # Plot the three comparisons
+    plot_hist_comparison(axs[0], large_angles1, large_angles2, 'Large Casts', 'blue', 'red')
+    plot_hist_comparison(axs[1], small_angles1, small_angles2, 'Small Casts', 'purple', 'orange')
+    plot_hist_comparison(axs[2], all_angles1, all_angles2, 'All Casts', 'green', 'brown')
+    
+    plt.suptitle(f'Comparison of Cast Head Angles: {labels[0]} vs {labels[1]}', fontsize=14)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    
+    # Save figure if basepath is provided
+    if basepath is not None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        label1_safe = ''.join(c if c.isalnum() else '_' for c in labels[0])
+        label2_safe = ''.join(c if c.isalnum() else '_' for c in labels[1])
+        filepath = os.path.join(basepath, f"head_angle_comparison_{label1_safe}_vs_{label2_safe}_{timestamp}.svg")
+        plt.savefig(filepath, format='svg', bbox_inches='tight')
+        print(f"Saved comparison plot to: {filepath}")
+    
+    plt.show()
+    
+    # Create box plots for a clearer comparison of distributions
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+    
+    # Function to create box plots
+    def create_boxplot(ax, data1, data2, title):
+        if len(data1) > 0 and len(data2) > 0:
+            # Create box plot
+            bp = ax.boxplot([data1, data2], labels=[labels[0], labels[1]], patch_artist=True,
+                          notch=True, showfliers=False)
+            
+            # Customize colors
+            bp['boxes'][0].set_facecolor('lightblue')
+            bp['boxes'][1].set_facecolor('lightcoral')
+            
+            # Add individual data points with jitter
+            for i, data in enumerate([data1, data2]):
+                pos = i + 1
+                jitter = np.random.normal(0, 0.04, size=len(data))
+                ax.scatter(np.full_like(data, pos) + jitter, data, alpha=0.3, s=10, 
+                          color='blue' if i == 0 else 'red')
+            
+            # Add statistical test results if available
+            test_results = stat_results.get(title.lower().replace(' ', '_'))
+            if test_results:
+                # Get p-value from Mann-Whitney test (most appropriate for boxplots)
+                p_val = test_results['mannwhitney_test']['pvalue']
+                
+                # Add significance bar
+                if p_val < 0.05:
+                    y_max = max(np.percentile(data1, 95), np.percentile(data2, 95)) + 10
+                    x1, x2 = 1, 2
+                    ax.plot([x1, x1, x2, x2], [y_max, y_max+5, y_max+5, y_max], lw=1.5, c='black')
+                    
+                    # Add stars based on significance level
+                    stars = '***' if p_val < 0.001 else ('**' if p_val < 0.01 else '*')
+                    ax.text((x1 + x2) * 0.5, y_max + 6, stars, ha='center', va='bottom', fontsize=14)
+                
+                # Add p-value text
+                sig_indicator = "*" if p_val < 0.05 else "n.s."
+                ax.text((1 + 2) * 0.5, ax.get_ylim()[1] * 0.9, f'p = {p_val:.4f} ({sig_indicator})', 
+                       ha='center', va='bottom', fontsize=10)
+                
+                # Add medians text
+                median1 = test_results['median1']
+                median2 = test_results['median2']
+                ax.text(1, median1 + 5, f"Median: {median1:.2f}°", ha='center', fontsize=9)
+                ax.text(2, median2 + 5, f"Median: {median2:.2f}°", ha='center', fontsize=9)
+        
+        ax.set_ylabel('Head Angle (°)')
+        ax.set_title(title)
+    
+    # Create the boxplots
+    create_boxplot(axs[0], large_angles1, large_angles2, 'Large Casts')
+    create_boxplot(axs[1], small_angles1, small_angles2, 'Small Casts')
+    create_boxplot(axs[2], all_angles1, all_angles2, 'All Casts')
+    
+    plt.suptitle(f'Head Angle Distributions: {labels[0]} vs {labels[1]}', fontsize=14)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    
+    # Save figure if basepath is provided
+    if basepath is not None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        label1_safe = ''.join(c if c.isalnum() else '_' for c in labels[0])
+        label2_safe = ''.join(c if c.isalnum() else '_' for c in labels[1])
+        filepath = os.path.join(basepath, f"head_angle_boxplot_{label1_safe}_vs_{label2_safe}_{timestamp}.svg")
+        plt.savefig(filepath, format='svg', bbox_inches='tight')
+        print(f"Saved boxplot to: {filepath}")
+    
+    plt.show()
+    
+    # NEW SECTION: Compare head angle as a function of body orientation
+    # Get the data for orientation-dependent head angles
+    bin_centers1 = results1['bin_centers']
+    bin_centers2 = results2['bin_centers']
+    
+    large_mean_angles1 = results1['large_mean_angles']
+    large_mean_angles2 = results2['large_mean_angles']
+    
+    small_mean_angles1 = results1['small_mean_angles']
+    small_mean_angles2 = results2['small_mean_angles']
+    
+    all_mean_angles1 = results1['all_mean_angles']
+    all_mean_angles2 = results2['all_mean_angles']
+    
+    large_smoothed1 = results1['large_smoothed']
+    large_smoothed2 = results2['large_smoothed']
+    
+    small_smoothed1 = results1['small_smoothed']
+    small_smoothed2 = results2['small_smoothed']
+    
+    all_smoothed1 = results1['all_smoothed']
+    all_smoothed2 = results2['all_smoothed']
+    
+    # Create figure for orientation-dependent analysis
+    fig, axs = plt.subplots(2, 3, figsize=(15, 10))
+    
+    # First row: Overlay plots for each cast type
+    def plot_orientation_comparison(ax, centers, data1, data2, title, color1='blue', color2='red'):
+        ax.plot(centers, data1, color=color1, linewidth=2, label=labels[0])
+        ax.plot(centers, data2, color=color2, linewidth=2, label=labels[1])
+        ax.set_xlabel('Body Orientation (°)')
+        ax.set_ylabel('Mean Head Angle (°)')
+        ax.set_xlim(-180, 180)
+        ax.set_title(title)
+        ax.legend()
+        ax.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+        ax.axvline(x=90, color='gray', linestyle=':', alpha=0.3)
+        ax.axvline(x=-90, color='gray', linestyle=':', alpha=0.3)
+    
+    # Plot comparisons in the first row
+    plot_orientation_comparison(axs[0, 0], bin_centers1, large_smoothed1, large_smoothed2, 'Large Casts', 'blue', 'red')
+    plot_orientation_comparison(axs[0, 1], bin_centers1, small_smoothed1, small_smoothed2, 'Small Casts', 'purple', 'orange')
+    plot_orientation_comparison(axs[0, 2], bin_centers1, all_smoothed1, all_smoothed2, 'All Casts', 'green', 'brown')
+    
+    # Second row: Difference plots for each cast type
+    def plot_orientation_difference(ax, centers, data1, data2, title, color='purple'):
+        # Calculate difference (data2 - data1)
+        diff = data2 - data1
+        
+        # Find regions where both curves have valid data
+        valid_mask = ~np.isnan(data1) & ~np.isnan(data2)
+        
+        # Plot difference
+        ax.plot(centers[valid_mask], diff[valid_mask], color=color, linewidth=2)
+        ax.fill_between(centers[valid_mask], 0, diff[valid_mask], where=(diff[valid_mask] > 0), 
+                       color=color, alpha=0.3, interpolate=True)
+        ax.fill_between(centers[valid_mask], diff[valid_mask], 0, where=(diff[valid_mask] < 0), 
+                       color=color, alpha=0.3, interpolate=True)
+        
+        ax.set_xlabel('Body Orientation (°)')
+        ax.set_ylabel('Difference in Head Angle (°)')
+        ax.set_xlim(-180, 180)
+        ax.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+        ax.set_title(f'Difference in {title} ({labels[1]} - {labels[0]})')
+        
+        # Add reference lines at key orientations
+        ax.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+        ax.axvline(x=90, color='gray', linestyle=':', alpha=0.3)
+        ax.axvline(x=-90, color='gray', linestyle=':', alpha=0.3)
+        
+        # Add mean difference as text
+        mean_diff = np.nanmean(diff)
+        ax.text(0.05, 0.95, f'Mean difference: {mean_diff:.2f}°', 
+               transform=ax.transAxes, fontsize=10, va='top', ha='left')
+    
+    # Plot differences in the second row
+    plot_orientation_difference(axs[1, 0], bin_centers1, large_smoothed1, large_smoothed2, 'Large Casts', 'darkred')
+    plot_orientation_difference(axs[1, 1], bin_centers1, small_smoothed1, small_smoothed2, 'Small Casts', 'darkblue')
+    plot_orientation_difference(axs[1, 2], bin_centers1, all_smoothed1, all_smoothed2, 'All Casts', 'darkgreen')
+    
+    plt.suptitle(f'Comparison of Head Angles by Body Orientation: {labels[0]} vs {labels[1]}', fontsize=14)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.93, hspace=0.3)
+    
+    # Save figure if basepath is provided
+    if basepath is not None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filepath = os.path.join(basepath, f"head_angle_by_orientation_{label1_safe}_vs_{label2_safe}_{timestamp}.svg")
+        plt.savefig(filepath, format='svg', bbox_inches='tight')
+        print(f"Saved orientation-dependent analysis to: {filepath}")
+    
+    plt.show()
+    
+    # Print summary of comparison results
+    print("\nSummary of Cast Head Angle Comparison:")
+    print(f"Comparing {labels[0]} vs {labels[1]}")
+    
+    for cast_type in ['large_casts', 'small_casts', 'all_casts']:
+        results = stat_results.get(cast_type)
+        if results:
+            print(f"\n{cast_type.replace('_', ' ').title()}:")
+            n1 = results['n_samples1']
+            n2 = results['n_samples2']
+            mean1 = results['mean1']
+            mean2 = results['mean2']
+            median1 = results['median1']
+            median2 = results['median2']
+            std1 = results['std1']
+            std2 = results['std2']
+            
+            print(f"  {labels[0]}: n={n1}, mean={mean1:.2f}±{std1:.2f}°, median={median1:.2f}°")
+            print(f"  {labels[1]}: n={n2}, mean={mean2:.2f}±{std2:.2f}°, median={median2:.2f}°")
+            print(f"  Mean difference: {mean2-mean1:.2f}°")
+            print(f"  Median difference: {median2-median1:.2f}°")
+            
+            # Print statistical test results
+            ks_p = results['ks_test']['pvalue']
+            mw_p = results['mannwhitney_test']['pvalue']
+            t_p = results['t_test']['pvalue']
+            
+            print(f"  Kolmogorov-Smirnov test: p={ks_p:.6f} {'(significant)' if ks_p < 0.05 else '(not significant)'}")
+            print(f"  Mann-Whitney U test: p={mw_p:.6f} {'(significant)' if mw_p < 0.05 else '(not significant)'}")
+            print(f"  t-test: p={t_p:.6f} {'(significant)' if t_p < 0.05 else '(not significant)'}")
+    
+    # Also analyze specific orientation regions - FIX HERE
+    print("\nAnalysis of Head Angles at Key Orientations:")
+    
+    # Define key orientation regions
+    regions = [
+        ('Upwind', -30, 30),
+        ('Downwind', [-180, -150, 150, 180]),
+        ('Perpendicular', [-120, -60, 60, 120])
+    ]
+    
+    for region_info in regions:
+        region_name = region_info[0]
+        limits = region_info[1:]
+        
+        print(f"\n{region_name} Orientation Region:")
+        
+        # Function to filter angles by orientation - FIX HERE
+        def filter_by_orientation(angles, orientations, limits):
+            # Handle different region formats
+            if isinstance(limits, list) and len(limits) == 4:
+                # Multiple ranges: e.g., [-180, -150, 150, 180] means -180 to -150 OR 150 to 180
+                mask1 = (orientations >= limits[0]) & (orientations <= limits[1])
+                mask2 = (orientations >= limits[2]) & (orientations <= limits[3])
+                return angles[mask1 | mask2]
+            elif len(limits) == 2 and isinstance(limits[0], (int, float)) and isinstance(limits[1], (int, float)):
+                # Simple range: e.g., -30 to 30
+                lower, upper = limits
+                return angles[(orientations >= lower) & (orientations <= upper)]
+            elif isinstance(limits[0], (int, float)):
+                # Single value - probably the upwind case which has 2 values in the tuple
+                lower, upper = limits[0], region_info[2]
+                return angles[(orientations >= lower) & (orientations <= upper)]
+            else:
+                print(f"Warning: Unhandled limits format: {limits}")
+                return np.array([])
+        
+        # Get angles in each region for both datasets
+        for cast_type, name in [('large', 'Large Casts'), ('small', 'Small Casts'), ('all', 'All Casts')]:
+            angles1 = results1[f'{cast_type}_cast_angles']
+            orientations1 = results1[f'{cast_type}_cast_orientations']
+            
+            angles2 = results2[f'{cast_type}_cast_angles']
+            orientations2 = results2[f'{cast_type}_cast_orientations']
+            
+            # Filter angles by orientation region
+            filtered_angles1 = filter_by_orientation(angles1, orientations1, limits)
+            filtered_angles2 = filter_by_orientation(angles2, orientations2, limits)
+            
+            if len(filtered_angles1) > 0 and len(filtered_angles2) > 0:
+                # Calculate statistics
+                mean1 = np.mean(filtered_angles1)
+                mean2 = np.mean(filtered_angles2)
+                std1 = np.std(filtered_angles1)
+                std2 = np.std(filtered_angles2)
+                
+                # Run statistical tests
+                _, t_pval = stats.ttest_ind(filtered_angles1, filtered_angles2, equal_var=False)
+                _, mw_pval = stats.mannwhitneyu(filtered_angles1, filtered_angles2, alternative='two-sided')
+                
+                print(f"  {name}:")
+                print(f"    {labels[0]}: n={len(filtered_angles1)}, mean={mean1:.2f}±{std1:.2f}°")
+                print(f"    {labels[1]}: n={len(filtered_angles2)}, mean={mean2:.2f}±{std2:.2f}°")
+                print(f"    Difference: {mean2-mean1:.2f}° (t-test p={t_pval:.4f}, MW test p={mw_pval:.4f})")
+    
+    # Return results for further analysis
+    return {
+        'results1': results1,
+        'results2': results2,
+        'statistical_tests': stat_results,
+        'labels': labels
+    }
+
+
+def compare_run_orientations(dataset1, dataset2, labels=None, bin_width=12, basepath=None):
+    """
+    Compare run orientation distributions between two datasets and test for statistical differences.
+    
+    Args:
+        dataset1 (dict): First tracking data dictionary
+        dataset2 (dict): Second tracking data dictionary to compare with the first
+        labels (tuple): Optional tuple of (label1, label2) for the datasets
+        bin_width (int): Width of orientation bins in degrees
+        basepath (str): Optional base path to save output SVG files
+        
+    Returns:
+        dict: Contains comparison statistics and test results
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy import stats
+    from scipy.ndimage import gaussian_filter1d
+    import os
+    from datetime import datetime
+    
+    # Set default labels if not provided
+    if labels is None:
+        labels = ('Dataset 1', 'Dataset 2')
+    
+    # Analyze both datasets individually
+    print(f"Analyzing {labels[0]}...")
+    results1 = analyze_run_orientations_all(dataset1)
+    
+    print(f"Analyzing {labels[1]}...")
+    results2 = analyze_run_orientations_all(dataset2)
+    
+    # Extract key data for comparison
+    large_orientations1 = results1['large_run_orientations']
+    small_orientations1 = results1['small_run_orientations']
+    all_orientations1 = results1['all_run_orientations']
+    
+    large_orientations2 = results2['large_run_orientations']
+    small_orientations2 = results2['small_run_orientations']
+    all_orientations2 = results2['all_run_orientations']
+    
+    # Store statistical test results
+    stat_results = {}
+    
+    # Function to perform statistical tests
+    def perform_tests(data1, data2, name):
+        if len(data1) > 0 and len(data2) > 0:
+            # Kolmogorov-Smirnov test (non-parametric, distribution-free)
+            ks_stat, ks_pval = stats.ks_2samp(data1, data2)
+            
+            # Watson-Williams test for circular data (parametric)
+            # First convert to radians for circular statistics
+            data1_rad = np.radians(data1)
+            data2_rad = np.radians(data2)
+            
+            # For Watson U² test, we need to combine, sort, and find ranks
+            try:
+                import pycircstat
+                watson_u2, watson_pval = pycircstat.watson_williams_test(data1_rad, data2_rad)
+            except:
+                # Fallback if pycircstat not available
+                watson_u2, watson_pval = None, None
+            
+            # Mean resultant vector length (measure of concentration for circular data)
+            r1 = np.abs(np.mean(np.exp(1j * data1_rad)))
+            r2 = np.abs(np.mean(np.exp(1j * data2_rad)))
+            
+            # Calculate circular means
+            mean1 = np.angle(np.mean(np.exp(1j * data1_rad)), deg=True)
+            mean2 = np.angle(np.mean(np.exp(1j * data2_rad)), deg=True)
+            
+            return {
+                'ks_test': {'statistic': ks_stat, 'pvalue': ks_pval},
+                'watson_williams_test': {'statistic': watson_u2, 'pvalue': watson_pval},
+                'n_samples1': len(data1),
+                'n_samples2': len(data2),
+                'circular_mean1': mean1,
+                'circular_mean2': mean2,
+                'resultant_length1': r1,
+                'resultant_length2': r2
+            }
+        else:
+            return None
+    
+    # Perform tests for all run types
+    stat_results['large_runs'] = perform_tests(large_orientations1, large_orientations2, 'large runs')
+    stat_results['small_runs'] = perform_tests(small_orientations1, small_orientations2, 'small runs')
+    stat_results['all_runs'] = perform_tests(all_orientations1, all_orientations2, 'all runs')
+    
+    # Create figure for comparing histograms
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+    
+    # Create histogram bins
+    bins = np.linspace(-180, 180, int(360/bin_width) + 1)
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+    
+    # Function to plot histogram comparison
+    def plot_hist_comparison(ax, data1, data2, title, color1='blue', color2='red'):
+        if len(data1) > 0 and len(data2) > 0:
+            # Calculate histograms
+            hist1, _ = np.histogram(data1, bins=bins, density=True)
+            hist2, _ = np.histogram(data2, bins=bins, density=True)
+            
+            # Smooth histograms
+            smoothed1 = gaussian_filter1d(hist1, sigma=1)
+            smoothed2 = gaussian_filter1d(hist2, sigma=1)
+            
+            # Plot histograms
+            ax.plot(bin_centers, smoothed1, color=color1, linewidth=2, 
+                   label=f"{labels[0]} (n={len(data1)})")
+            ax.plot(bin_centers, smoothed2, color=color2, linewidth=2, 
+                   label=f"{labels[1]} (n={len(data2)})")
+            
+            # Add statistical test results if available
+            test_results = stat_results.get(title.lower().replace(' ', '_'))
+            if test_results:
+                # Format p-values
+                ks_p = test_results['ks_test']['pvalue']
+                ww_p = test_results['watson_williams_test']['pvalue'] if test_results['watson_williams_test'] else None
+                
+                # Add significance asterisks
+                ks_sig = '***' if ks_p < 0.001 else ('**' if ks_p < 0.01 else ('*' if ks_p < 0.05 else 'n.s.'))
+                ww_sig = '***' if ww_p and ww_p < 0.001 else ('**' if ww_p and ww_p < 0.01 else ('*' if ww_p and ww_p < 0.05 else 'n.s.'))
+                
+                # Add text for statistical test results
+                y_pos = ax.get_ylim()[1] * 0.95
+                text_props = {'fontsize': 9, 'ha': 'left', 'transform': ax.transAxes}
+                
+                stat_text = f"KS test: p={ks_p:.4f} ({ks_sig})"
+                if ww_p:
+                    stat_text += f"\nW-W test: p={ww_p:.4f} ({ww_sig})"
+                
+                ax.text(0.05, 0.95, stat_text, va='top', **text_props)
+                
+                # Add circular means with directional information
+                mean1 = test_results['circular_mean1']
+                mean2 = test_results['circular_mean2']
+                r1 = test_results['resultant_length1']
+                r2 = test_results['resultant_length2']
+                
+                ax.text(0.05, 0.05, 
+                      f"{labels[0]}: {mean1:.1f}°, r={r1:.2f}\n{labels[1]}: {mean2:.1f}°, r={r2:.2f}", 
+                      va='bottom', **text_props)
+                
+                # Add markers for mean directions
+                arrow_length = 0.9 * max(np.max(smoothed1), np.max(smoothed2))
+                
+                # FIX: Changed arrow parameter names to match matplotlib's expected parameters
+                arrow_props = {'width': 0.008, 'headwidth': 0.02, 'headlength': 0.02, 'fc': 'black', 'ec': 'black', 'alpha': 0.7}
+                
+                # Plot arrows at mean directions
+                if not np.isnan(mean1):
+                    ax.annotate('', xy=(mean1, arrow_length), xytext=(mean1, 0),
+                               arrowprops=dict(**arrow_props, color=color1))
+                
+                if not np.isnan(mean2):
+                    ax.annotate('', xy=(mean2, arrow_length), xytext=(mean2, 0),
+                               arrowprops=dict(**arrow_props, color=color2))
+        
+        ax.set_xlabel('Orientation (°)')
+        ax.set_ylabel('Probability Density')
+        ax.set_xlim(-180, 180)
+        ax.set_title(title)
+        ax.legend(loc='upper right')
+        
+        # Add reference lines at 0, 90, -90 degrees
+        ax.axvline(x=0, color='black', linestyle='--', alpha=0.3)
+        ax.axvline(x=90, color='black', linestyle=':', alpha=0.3)
+        ax.axvline(x=-90, color='black', linestyle=':', alpha=0.3)
+    
+    # Plot the three comparisons
+    plot_hist_comparison(axs[0], large_orientations1, large_orientations2, 'Large Runs', 'darkred', 'salmon')
+    plot_hist_comparison(axs[1], small_orientations1, small_orientations2, 'Small Runs', 'darkblue', 'skyblue')
+    plot_hist_comparison(axs[2], all_orientations1, all_orientations2, 'All Runs', 'darkgreen', 'lightgreen')
+    
+    plt.suptitle(f'Comparison of Run Orientations: {labels[0]} vs {labels[1]}', fontsize=14)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    
+    # Save figure if basepath is provided
+    if basepath is not None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        label1_safe = ''.join(c if c.isalnum() else '_' for c in labels[0])
+        label2_safe = ''.join(c if c.isalnum() else '_' for c in labels[1])
+        filepath = os.path.join(basepath, f"run_orientation_comparison_{label1_safe}_vs_{label2_safe}_{timestamp}.svg")
+        plt.savefig(filepath, format='svg', bbox_inches='tight')
+        print(f"Saved comparison plot to: {filepath}")
+    
+    plt.show()
+    
+    # Create circular plots for orientation data
+    fig = plt.figure(figsize=(15, 5))
+    
+    # Function to create polar histogram plot
+    def plot_circular_hist(ax, data, bins=36, color='blue', alpha=0.5, label=None):
+        if len(data) == 0:
+            return
+            
+        # Convert to radians for circular histogram
+        data_rad = np.radians(data)
+        
+        # Create bins in radians
+        bins_rad = np.linspace(-np.pi, np.pi, bins+1)
+        
+        # Calculate histogram
+        hist, _ = np.histogram(data_rad, bins=bins_rad, density=True)
+        
+        # Smooth histogram
+        hist = gaussian_filter1d(hist, sigma=1)
+        
+        # Plot histogram as filled area
+        bin_width = 2 * np.pi / bins
+        bin_centers = bins_rad[:-1] + bin_width/2
+        
+        # Scale histogram values 
+        max_radius = 1.0
+        hist_scaled = hist / np.max(hist) * max_radius if np.max(hist) > 0 else hist
+        
+        # Plot as filled line
+        ax.plot(bin_centers, hist_scaled, color=color, linewidth=2, label=label)
+        ax.fill_between(bin_centers, 0, hist_scaled, color=color, alpha=alpha)
+        
+        # Add mean direction as arrow
+        mean_angle = np.angle(np.mean(np.exp(1j * data_rad)))
+        mean_r = np.abs(np.mean(np.exp(1j * data_rad)))
+        
+        # FIX: Use native arrow function for polar plots instead of annotate
+        ax.arrow(0, 0, mean_angle, mean_r*0.8, 
+                alpha=0.8, width=0.02, head_width=0.1, head_length=0.1,
+                fc=color, ec='black')
+    
+    # Create three polar subplots
+    ax1 = fig.add_subplot(131, projection='polar')
+    ax2 = fig.add_subplot(132, projection='polar')
+    ax3 = fig.add_subplot(133, projection='polar')
+    
+    # Plot polar histograms
+    # Large runs
+    if len(large_orientations1) > 0 or len(large_orientations2) > 0:
+        plot_circular_hist(ax1, large_orientations1, color='darkred', alpha=0.3, label=labels[0])
+        plot_circular_hist(ax1, large_orientations2, color='salmon', alpha=0.3, label=labels[1])
+        ax1.set_title('Large Runs')
+    
+    # Small runs
+    if len(small_orientations1) > 0 or len(small_orientations2) > 0:
+        plot_circular_hist(ax2, small_orientations1, color='darkblue', alpha=0.3, label=labels[0])
+        plot_circular_hist(ax2, small_orientations2, color='skyblue', alpha=0.3, label=labels[1])
+        ax2.set_title('Small Runs')
+    
+    # All runs
+    if len(all_orientations1) > 0 or len(all_orientations2) > 0:
+        plot_circular_hist(ax3, all_orientations1, color='darkgreen', alpha=0.3, label=labels[0])
+        plot_circular_hist(ax3, all_orientations2, color='lightgreen', alpha=0.3, label=labels[1])
+        ax3.set_title('All Runs')
+    
+    # Configure polar axes
+    for ax in [ax1, ax2, ax3]:
+        # Set ticks and labels
+        ax.set_theta_zero_location('N')  # 0 at the top
+        ax.set_theta_direction(-1)      # clockwise
+        ax.set_thetagrids([0, 90, 180, 270], ['0°', '90°', '±180°', '-90°'])
+        ax.set_rlabel_position(45)      # Move radial labels
+        ax.grid(True)
+        ax.legend(loc='upper right', bbox_to_anchor=(1.2, 1.0))
+    
+    plt.suptitle(f'Circular Comparison of Run Orientations: {labels[0]} vs {labels[1]}', fontsize=14)
+    plt.tight_layout()
+    
+    # Save figure if basepath is provided
+    if basepath is not None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filepath = os.path.join(basepath, f"run_orientation_circular_{label1_safe}_vs_{label2_safe}_{timestamp}.svg")
+        plt.savefig(filepath, format='svg', bbox_inches='tight')
+        print(f"Saved circular plot to: {filepath}")
+    
+    plt.show()
+    
+    # Print summary of comparison results
+    print("\nSummary of Run Orientation Comparison:")
+    print(f"Comparing {labels[0]} vs {labels[1]}")
+    
+    for run_type in ['large_runs', 'small_runs', 'all_runs']:
+        results = stat_results.get(run_type)
+        if results:
+            print(f"\n{run_type.replace('_', ' ').title()}:")
+            n1 = results['n_samples1']
+            n2 = results['n_samples2']
+            mean1 = results['circular_mean1']
+            mean2 = results['circular_mean2']
+            r1 = results['resultant_length1']
+            r2 = results['resultant_length2']
+            
+            print(f"  {labels[0]}: n={n1}, mean direction={mean1:.1f}°, concentration={r1:.2f}")
+            print(f"  {labels[1]}: n={n2}, mean direction={mean2:.1f}°, concentration={r2:.2f}")
+            print(f"  Direction difference: {(mean2-mean1)%360:.1f}°")
+            
+            # Print statistical test results
+            ks_p = results['ks_test']['pvalue']
+            ww_p = results['watson_williams_test']['pvalue'] if results['watson_williams_test'] else None
+            
+            print(f"  Kolmogorov-Smirnov test: p={ks_p:.6f} {'(significant)' if ks_p < 0.05 else '(not significant)'}")
+            if ww_p:
+                print(f"  Watson-Williams test: p={ww_p:.6f} {'(significant)' if ww_p < 0.05 else '(not significant)'}")
+    
+    # Return results for further analysis
+    return {
+        'results1': results1,
+        'results2': results2,
+        'statistical_tests': stat_results,
+        'labels': labels
+    }
+
+
+def compare_cast_orientations(dataset1, dataset2, labels=None, bin_width=10, basepath=None):
+    """
+    Compare cast orientation distributions between two datasets and test for statistical differences.
+    
+    Args:
+        dataset1 (dict): First tracking data dictionary
+        dataset2 (dict): Second tracking data dictionary to compare with the first
+        labels (tuple): Optional tuple of (label1, label2) for the datasets
+        bin_width (int): Width of orientation bins in degrees
+        basepath (str): Optional base path to save output SVG files
+        
+    Returns:
+        dict: Contains comparison statistics and test results
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy import stats
+    from scipy.ndimage import gaussian_filter1d
+    import os
+    from datetime import datetime
+    
+    # Set default labels if not provided
+    if labels is None:
+        labels = ('Dataset 1', 'Dataset 2')
+    
+    # Analyze both datasets individually
+    print(f"Analyzing {labels[0]}...")
+    results1 = analyze_cast_orientations_all(dataset1)
+    
+    print(f"Analyzing {labels[1]}...")
+    results2 = analyze_cast_orientations_all(dataset2)
+    
+    # Extract key data for comparison
+    large_orientations1 = results1['large_cast_orientations']
+    small_orientations1 = results1['small_cast_orientations']
+    all_orientations1 = results1['all_cast_orientations']
+    
+    large_orientations2 = results2['large_cast_orientations']
+    small_orientations2 = results2['small_cast_orientations']
+    all_orientations2 = results2['all_cast_orientations']
+    
+    # Store statistical test results
+    stat_results = {}
+    
+    # Function to perform statistical tests
+    def perform_tests(data1, data2, name):
+        if len(data1) > 0 and len(data2) > 0:
+            # Kolmogorov-Smirnov test (non-parametric, distribution-free)
+            ks_stat, ks_pval = stats.ks_2samp(data1, data2)
+            
+            # For circular data, we need specialized tests
+            # First convert to radians for circular statistics
+            data1_rad = np.radians(data1)
+            data2_rad = np.radians(data2)
+            
+            # Try to use pycircstat if available, otherwise fallback
+            try:
+                import pycircstat
+                # Watson-Williams test (parametric, for circular data)
+                ww_stat, ww_pval = pycircstat.watson_williams_test(data1_rad, data2_rad)
+            except:
+                # Fallback if pycircstat not available
+                ww_stat, ww_pval = None, None
+            
+            # Calculate circular means and concentration parameters
+            mean1 = np.degrees(np.angle(np.mean(np.exp(1j * data1_rad))))
+            mean2 = np.degrees(np.angle(np.mean(np.exp(1j * data2_rad))))
+            r1 = np.abs(np.mean(np.exp(1j * data1_rad)))  # resultant vector length (concentration)
+            r2 = np.abs(np.mean(np.exp(1j * data2_rad)))
+            
+            return {
+                'ks_test': {'statistic': ks_stat, 'pvalue': ks_pval},
+                'watson_williams_test': {'statistic': ww_stat, 'pvalue': ww_pval},
+                'n_samples1': len(data1),
+                'n_samples2': len(data2),
+                'circular_mean1': mean1,
+                'circular_mean2': mean2,
+                'resultant_length1': r1,
+                'resultant_length2': r2
+            }
+        else:
+            return None
+    
+    # Perform tests for all cast types
+    stat_results['large_casts'] = perform_tests(large_orientations1, large_orientations2, 'large casts')
+    stat_results['small_casts'] = perform_tests(small_orientations1, small_orientations2, 'small casts')
+    stat_results['all_casts'] = perform_tests(all_orientations1, all_orientations2, 'all casts')
+    
+    # Create figure with subplots for distribution comparison
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+    
+    # Create histogram bins
+    bins = np.linspace(-180, 180, int(360/bin_width) + 1)
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+    
+    # Function to plot histogram comparison
+    def plot_hist_comparison(ax, data1, data2, title, color1='blue', color2='red'):
+        if len(data1) > 0 and len(data2) > 0:
+            # Calculate histograms
+            hist1, _ = np.histogram(data1, bins=bins, density=True)
+            hist2, _ = np.histogram(data2, bins=bins, density=True)
+            
+            # Smooth histograms
+            smoothed1 = gaussian_filter1d(hist1, sigma=1)
+            smoothed2 = gaussian_filter1d(hist2, sigma=1)
+            
+            # Plot histograms with raw data points
+            ax.plot(bin_centers, hist1, 'k-', alpha=0.2, linewidth=0.5)
+            ax.plot(bin_centers, hist2, 'k-', alpha=0.2, linewidth=0.5)
+            
+            # Plot smoothed curves
+            ax.plot(bin_centers, smoothed1, color=color1, linewidth=2, 
+                   label=f"{labels[0]} (n={len(data1)})")
+            ax.plot(bin_centers, smoothed2, color=color2, linewidth=2, 
+                   label=f"{labels[1]} (n={len(data2)})")
+            
+            # Add statistical test results if available
+            test_results = stat_results.get(title.lower().replace(' ', '_'))
+            if test_results:
+                # Format p-values
+                ks_p = test_results['ks_test']['pvalue']
+                ww_p = test_results['watson_williams_test']['pvalue'] if test_results['watson_williams_test'] else None
+                
+                # Add significance asterisks
+                ks_sig = '***' if ks_p < 0.001 else ('**' if ks_p < 0.01 else ('*' if ks_p < 0.05 else 'n.s.'))
+                ww_sig = '***' if ww_p and ww_p < 0.001 else ('**' if ww_p and ww_p < 0.01 else ('*' if ww_p and ww_p < 0.05 else 'n.s.'))
+                
+                # Add text for statistical test results
+                y_pos = 0.95
+                text_props = {'fontsize': 9, 'ha': 'left', 'transform': ax.transAxes}
+                
+                stat_text = f"KS test: p={ks_p:.4f} ({ks_sig})"
+                if ww_p:
+                    stat_text += f"\nW-W test: p={ww_p:.4f} ({ww_sig})"
+                
+                ax.text(0.05, y_pos, stat_text, va='top', **text_props)
+                
+                # Add circular means with directional information
+                mean1 = test_results['circular_mean1']
+                mean2 = test_results['circular_mean2']
+                r1 = test_results['resultant_length1']
+                r2 = test_results['resultant_length2']
+                
+                mean_text = (f"{labels[0]}: {mean1:.1f}°, r={r1:.2f}\n"
+                            f"{labels[1]}: {mean2:.1f}°, r={r2:.2f}")
+                
+                ax.text(0.05, 0.05, mean_text, va='bottom', **text_props)
+                
+                # Add arrows at mean directions
+                arrow_height = 0.9 * max(np.max(smoothed1), np.max(smoothed2))
+                
+                # Add arrows at mean directions if they're valid
+                if not np.isnan(mean1):
+                    ax.annotate('', xy=(mean1, arrow_height), xytext=(mean1, 0),
+                               arrowprops=dict(width=0.008, headwidth=0.02, headlength=0.02, 
+                                             fc=color1, ec=color1, alpha=0.7))
+                
+                if not np.isnan(mean2):
+                    ax.annotate('', xy=(mean2, arrow_height), xytext=(mean2, 0),
+                               arrowprops=dict(width=0.008, headwidth=0.02, headlength=0.02, 
+                                             fc=color2, ec=color2, alpha=0.7))
+                
+                # Add significance bar if p-value is significant
+                if ks_p < 0.05 or (ww_p and ww_p < 0.05):
+                    y_max = ax.get_ylim()[1] * 0.9
+                    ax.plot([-180, 180], [y_max, y_max], 'k-', linewidth=1.5)
+                    ax.text(0, y_max * 1.05, "Significant difference", 
+                          ha='center', va='bottom', fontsize=10)
+        
+        # Add reference lines and format
+        ax.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+        ax.axvline(x=180, color='gray', linestyle='--', alpha=0.3)
+        ax.axvline(x=-180, color='gray', linestyle='--', alpha=0.3)
+        ax.set_xlabel('Cast Orientation (°)')
+        ax.set_ylabel('Probability Density')
+        ax.set_xlim(-180, 180)
+        ax.set_title(title)
+        ax.legend(loc='upper right')
+    
+    # Plot the three comparisons
+    plot_hist_comparison(axs[0], large_orientations1, large_orientations2, 'Large Casts', 'darkred', 'salmon')
+    plot_hist_comparison(axs[1], small_orientations1, small_orientations2, 'Small Casts', 'darkblue', 'skyblue')
+    plot_hist_comparison(axs[2], all_orientations1, all_orientations2, 'All Casts', 'darkgreen', 'lightgreen')
+    
+    plt.suptitle(f'Comparison of Cast Orientations: {labels[0]} vs {labels[1]}', fontsize=14)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    
+    # Save figure if basepath is provided
+    if basepath is not None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        label1_safe = ''.join(c if c.isalnum() else '_' for c in labels[0])
+        label2_safe = ''.join(c if c.isalnum() else '_' for c in labels[1])
+        filepath = os.path.join(basepath, f"cast_orientation_comparison_{label1_safe}_vs_{label2_safe}_{timestamp}.svg")
+        plt.savefig(filepath, format='svg', bbox_inches='tight')
+        print(f"Saved comparison plot to: {filepath}")
+    
+    plt.show()
+    
+    # Create circular plots for better visualization of cast orientations
+    fig = plt.figure(figsize=(15, 5))
+    
+    # Function to create polar histogram plot
+    def plot_circular_hist(ax, data, bins=36, color='blue', alpha=0.5, label=None):
+        if len(data) == 0:
+            return
+            
+        # Convert to radians for circular histogram
+        data_rad = np.radians(data)
+        
+        # Create bins in radians
+        bins_rad = np.linspace(-np.pi, np.pi, bins+1)
+        
+        # Calculate histogram
+        hist, _ = np.histogram(data_rad, bins=bins_rad, density=True)
+        
+        # Smooth histogram
+        hist = gaussian_filter1d(hist, sigma=1)
+        
+        # Plot histogram as filled area
+        bin_width = 2 * np.pi / bins
+        bin_centers = bins_rad[:-1] + bin_width/2
+        
+        # Scale histogram values 
+        max_radius = 1.0
+        hist_scaled = hist / np.max(hist) * max_radius if np.max(hist) > 0 else hist
+        
+        # Plot as filled line
+        ax.plot(bin_centers, hist_scaled, color=color, linewidth=2, label=label)
+        ax.fill_between(bin_centers, 0, hist_scaled, color=color, alpha=alpha)
+        
+        # Add mean direction as arrow
+        mean_angle = np.angle(np.mean(np.exp(1j * data_rad)))
+        mean_r = np.abs(np.mean(np.exp(1j * data_rad)))
+        
+        # Add arrow showing mean direction
+        ax.arrow(0, 0, mean_angle, mean_r*0.8, 
+                alpha=0.8, width=0.02, head_width=0.1, head_length=0.1,
+                fc=color, ec='black')
+    
+    # Create three polar subplots
+    ax1 = fig.add_subplot(131, projection='polar')
+    ax2 = fig.add_subplot(132, projection='polar')
+    ax3 = fig.add_subplot(133, projection='polar')
+    
+    # Plot polar histograms
+    # Large casts
+    if len(large_orientations1) > 0 or len(large_orientations2) > 0:
+        plot_circular_hist(ax1, large_orientations1, color='darkred', alpha=0.3, label=labels[0])
+        plot_circular_hist(ax1, large_orientations2, color='salmon', alpha=0.3, label=labels[1])
+        ax1.set_title('Large Casts')
+    
+    # Small casts
+    if len(small_orientations1) > 0 or len(small_orientations2) > 0:
+        plot_circular_hist(ax2, small_orientations1, color='darkblue', alpha=0.3, label=labels[0])
+        plot_circular_hist(ax2, small_orientations2, color='skyblue', alpha=0.3, label=labels[1])
+        ax2.set_title('Small Casts')
+    
+    # All casts
+    if len(all_orientations1) > 0 or len(all_orientations2) > 0:
+        plot_circular_hist(ax3, all_orientations1, color='darkgreen', alpha=0.3, label=labels[0])
+        plot_circular_hist(ax3, all_orientations2, color='lightgreen', alpha=0.3, label=labels[1])
+        ax3.set_title('All Casts')
+    
+    # Configure polar axes
+    for ax in [ax1, ax2, ax3]:
+        # Set ticks and labels
+        ax.set_theta_zero_location('N')  # 0 at the top
+        ax.set_theta_direction(-1)      # clockwise
+        ax.set_thetagrids([0, 90, 180, 270], ['0°', '90°', '±180°', '-90°'])
+        ax.set_rlabel_position(45)      # Move radial labels
+        ax.grid(True)
+        ax.legend(loc='upper right', bbox_to_anchor=(1.2, 1.0))
+    
+    plt.suptitle(f'Circular Comparison of Cast Orientations: {labels[0]} vs {labels[1]}', fontsize=14)
+    plt.tight_layout()
+    
+    # Save figure if basepath is provided
+    if basepath is not None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filepath = os.path.join(basepath, f"cast_orientation_circular_{label1_safe}_vs_{label2_safe}_{timestamp}.svg")
+        plt.savefig(filepath, format='svg', bbox_inches='tight')
+        print(f"Saved circular plot to: {filepath}")
+    
+    plt.show()
+    
+    # Print summary of comparison results
+    print("\nSummary of Cast Orientation Comparison:")
+    print(f"Comparing {labels[0]} vs {labels[1]}")
+    
+    for cast_type in ['large_casts', 'small_casts', 'all_casts']:
+        results = stat_results.get(cast_type)
+        if results:
+            print(f"\n{cast_type.replace('_', ' ').title()}:")
+            n1 = results['n_samples1']
+            n2 = results['n_samples2']
+            mean1 = results['circular_mean1']
+            mean2 = results['circular_mean2']
+            r1 = results['resultant_length1']
+            r2 = results['resultant_length2']
+            
+            print(f"  {labels[0]}: n={n1}, mean direction={mean1:.1f}°, concentration={r1:.2f}")
+            print(f"  {labels[1]}: n={n2}, mean direction={mean2:.1f}°, concentration={r2:.2f}")
+            print(f"  Direction difference: {abs(mean2-mean1)%360:.1f}°")
+            
+            # Print statistical test results
+            ks_p = results['ks_test']['pvalue']
+            ww_p = results['watson_williams_test']['pvalue'] if results['watson_williams_test'] else None
+            
+            print(f"  Kolmogorov-Smirnov test: p={ks_p:.6f} {'(significant)' if ks_p < 0.05 else '(not significant)'}")
+            if ww_p:
+                print(f"  Watson-Williams test: p={ww_p:.6f} {'(significant)' if ww_p < 0.05 else '(not significant)'}")
+    
+    # Return results for further analysis
+    return {
+        'results1': results1,
+        'results2': results2,
+        'statistical_tests': stat_results,
+        'labels': labels
+    }
+
+
+
+def compare_cast_directions_perpendicular(genotype1_data, genotype2_data, labels=None, angle_width=5, min_frame=3, basepath=None):
+    """
+    Compare upstream and downstream cast distributions between two genotypes when larvae are perpendicular to flow.
+    
+    Args:
+        genotype1_data (dict): Tracking data dictionary for first genotype
+        genotype2_data (dict): Tracking data dictionary for second genotype
+        labels (tuple): Optional tuple of (label1, label2) for the genotypes
+        angle_width (int): Width of perpendicular orientation sector in degrees
+        min_frame (int): Minimum number of frames to consider for a cast
+        basepath (str): Base path for saving output files
+        
+    Returns:
+        dict: Contains comparison statistics and test results
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy import stats
+    import os
+    from datetime import datetime
+    
+    # Set default labels if not provided
+    if labels is None:
+        labels = ('Genotype 1', 'Genotype 2')
+    
+    # Create safe filenames from labels
+    label1_safe = ''.join(c if c.isalnum() else '_' for c in labels[0])
+    label2_safe = ''.join(c if c.isalnum() else '_' for c in labels[1])
+    
+    # Create timestamp for file names
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Make sure basepath exists
+    if basepath is not None:
+        os.makedirs(basepath, exist_ok=True)
+    
+    # Analyze both genotypes separately
+    print(f"Analyzing {labels[0]}...")
+    genotype1_results = analyze_perpendicular_cast_directions_new(
+        genotype1_data, angle_width=angle_width, min_frame=min_frame, basepath=None)
+    
+    print(f"Analyzing {labels[1]}...")
+    genotype2_results = analyze_perpendicular_cast_directions_new(
+        genotype2_data, angle_width=angle_width, min_frame=min_frame, basepath=None)
+    
+    # Store comparison results
+    comparison_results = {
+        'angle_width': angle_width,
+        'labels': labels,
+        'statistical_tests': {},
+        'counts': {}
+    }
+    
+    # Cast types to analyze
+    cast_types = ['all', 'large', 'small']
+    
+    # Colors for each genotype
+    genotype_colors = {
+        labels[0]: {
+            'upstream': '#1f77b4',   # blue
+            'downstream': '#9ecae1'  # light blue
+        },
+        labels[1]: {
+            'upstream': '#d62728',   # red
+            'downstream': '#ff9896'  # light red
+        }
+    }
+    
+    # Create figure for comparison
+    n_cast_types = sum(1 for ct in cast_types 
+                       if len(genotype1_results['larva_probabilities'][ct]['upstream']) > 0 
+                       and len(genotype2_results['larva_probabilities'][ct]['upstream']) > 0)
+    
+    if n_cast_types == 0:
+        print("No valid cast types found with sufficient data in both genotypes.")
+        return
+    
+    fig, axes = plt.subplots(1, n_cast_types, figsize=(4.5 * n_cast_types, 6))
+    
+    # Handle the case of a single subplot
+    if n_cast_types == 1:
+        axes = [axes]
+    
+    # Variable to store statistical results for text file
+    stat_results_txt = []
+    stat_results_txt.append(f"Cast Direction Comparison: {labels[0]} vs {labels[1]}")
+    stat_results_txt.append(f"Analysis timestamp: {timestamp}")
+    stat_results_txt.append(f"Perpendicular angle width: ±{angle_width}°")
+    stat_results_txt.append("\n")
+    
+    # Process each cast type
+    ax_idx = 0  # Counter for valid subplots
+    for cast_type in cast_types:
+        # Skip if not enough data in either genotype
+        if (len(genotype1_results['larva_probabilities'][cast_type]['upstream']) == 0 or
+            len(genotype2_results['larva_probabilities'][cast_type]['upstream']) == 0):
+            continue
+        
+        ax = axes[ax_idx]
+        ax_idx += 1
+        
+        # Get the per-larva probabilities
+        g1_upstream = np.array(genotype1_results['larva_probabilities'][cast_type]['upstream'])
+        g1_downstream = np.array(genotype1_results['larva_probabilities'][cast_type]['downstream'])
+        g2_upstream = np.array(genotype2_results['larva_probabilities'][cast_type]['upstream'])
+        g2_downstream = np.array(genotype2_results['larva_probabilities'][cast_type]['downstream'])
+        
+        # Get raw counts
+        g1_up_count = genotype1_results['total_counts'][cast_type]['upstream']
+        g1_down_count = genotype1_results['total_counts'][cast_type]['downstream']
+        g2_up_count = genotype2_results['total_counts'][cast_type]['upstream']
+        g2_down_count = genotype2_results['total_counts'][cast_type]['downstream']
+        
+        comparison_results['counts'][cast_type] = {
+            labels[0]: {'upstream': g1_up_count, 'downstream': g1_down_count},
+            labels[1]: {'upstream': g2_up_count, 'downstream': g2_down_count}
+        }
+        
+        # Calculate statistics
+        g1_up_mean = np.mean(g1_upstream)
+        g1_up_std = np.std(g1_upstream)
+        g1_up_sem = g1_up_std / np.sqrt(len(g1_upstream))
+        g1_up_median = np.median(g1_upstream)
+        
+        g1_down_mean = np.mean(g1_downstream)
+        g1_down_std = np.std(g1_downstream)
+        g1_down_sem = g1_down_std / np.sqrt(len(g1_downstream))
+        g1_down_median = np.median(g1_downstream)
+        
+        g2_up_mean = np.mean(g2_upstream)
+        g2_up_std = np.std(g2_upstream)
+        g2_up_sem = g2_up_std / np.sqrt(len(g2_upstream))
+        g2_up_median = np.median(g2_upstream)
+        
+        g2_down_mean = np.mean(g2_downstream)
+        g2_down_std = np.std(g2_downstream)
+        g2_down_sem = g2_down_std / np.sqrt(len(g2_downstream))
+        g2_down_median = np.median(g2_downstream)
+        
+        # Statistical tests
+        # 1. Compare upstream probabilities between genotypes
+        up_ttest = stats.ttest_ind(g1_upstream, g2_upstream, equal_var=False)
+        up_mw = stats.mannwhitneyu(g1_upstream, g2_upstream)
+        
+        # 2. Compare downstream probabilities between genotypes
+        down_ttest = stats.ttest_ind(g1_downstream, g2_downstream, equal_var=False)
+        down_mw = stats.mannwhitneyu(g1_downstream, g2_downstream)
+        
+        # 3. Compare within each genotype (upstream vs. downstream)
+        g1_within_ttest = stats.ttest_rel(g1_upstream, g1_downstream)
+        g2_within_ttest = stats.ttest_rel(g2_upstream, g2_downstream)
+        
+        # Store results
+        comparison_results['statistical_tests'][cast_type] = {
+            'upstream_comparison': {
+                'ttest': {'statistic': up_ttest.statistic, 'pvalue': up_ttest.pvalue},
+                'mannwhitney': {'statistic': up_mw.statistic, 'pvalue': up_mw.pvalue}
+            },
+            'downstream_comparison': {
+                'ttest': {'statistic': down_ttest.statistic, 'pvalue': down_ttest.pvalue},
+                'mannwhitney': {'statistic': down_mw.statistic, 'pvalue': down_mw.pvalue}
+            },
+            'within_genotype': {
+                labels[0]: {'statistic': g1_within_ttest.statistic, 'pvalue': g1_within_ttest.pvalue},
+                labels[1]: {'statistic': g2_within_ttest.statistic, 'pvalue': g2_within_ttest.pvalue}
+            },
+            'means': {
+                labels[0]: {'upstream': g1_up_mean, 'downstream': g1_down_mean},
+                labels[1]: {'upstream': g2_up_mean, 'downstream': g2_down_mean}
+            },
+            'medians': {
+                labels[0]: {'upstream': g1_up_median, 'downstream': g1_down_median},
+                labels[1]: {'upstream': g2_up_median, 'downstream': g2_down_median}
+            },
+            'std': {
+                labels[0]: {'upstream': g1_up_std, 'downstream': g1_down_std},
+                labels[1]: {'upstream': g2_up_std, 'downstream': g2_down_std}
+            },
+            'sem': {
+                labels[0]: {'upstream': g1_up_sem, 'downstream': g1_down_sem},
+                labels[1]: {'upstream': g2_up_sem, 'downstream': g2_down_sem}
+            },
+            'n_larvae': {
+                labels[0]: len(g1_upstream),
+                labels[1]: len(g2_upstream)
+            }
+        }
+        
+        # Add cast type results to text output
+        stat_results_txt.append(f"--- {cast_type.upper()} CASTS ---")
+        stat_results_txt.append(f"Sample sizes:")
+        stat_results_txt.append(f"  {labels[0]}: {len(g1_upstream)} larvae, {g1_up_count + g1_down_count} casts ({g1_up_count} upstream, {g1_down_count} downstream)")
+        stat_results_txt.append(f"  {labels[1]}: {len(g2_upstream)} larvae, {g2_up_count + g2_down_count} casts ({g2_up_count} upstream, {g2_down_count} downstream)")
+        stat_results_txt.append("\nUpstream probability:")
+        stat_results_txt.append(f"  {labels[0]}: mean={g1_up_mean:.3f} ± {g1_up_sem:.3f} (SEM), median={g1_up_median:.3f}")
+        stat_results_txt.append(f"  {labels[1]}: mean={g2_up_mean:.3f} ± {g2_up_sem:.3f} (SEM), median={g2_up_median:.3f}")
+        stat_results_txt.append(f"  Difference: {g2_up_mean - g1_up_mean:.3f}")
+        stat_results_txt.append(f"  t-test: t={up_ttest.statistic:.3f}, p={up_ttest.pvalue:.6f} ({'significant' if up_ttest.pvalue < 0.05 else 'not significant'})")
+        stat_results_txt.append(f"  Mann-Whitney: U={up_mw.statistic:.1f}, p={up_mw.pvalue:.6f} ({'significant' if up_mw.pvalue < 0.05 else 'not significant'})")
+        
+        stat_results_txt.append("\nDownstream probability:")
+        stat_results_txt.append(f"  {labels[0]}: mean={g1_down_mean:.3f} ± {g1_down_sem:.3f} (SEM), median={g1_down_median:.3f}")
+        stat_results_txt.append(f"  {labels[1]}: mean={g2_down_mean:.3f} ± {g2_down_sem:.3f} (SEM), median={g2_down_median:.3f}")
+        stat_results_txt.append(f"  Difference: {g2_down_mean - g1_down_mean:.3f}")
+        stat_results_txt.append(f"  t-test: t={down_ttest.statistic:.3f}, p={down_ttest.pvalue:.6f} ({'significant' if down_ttest.pvalue < 0.05 else 'not significant'})")
+        stat_results_txt.append(f"  Mann-Whitney: U={down_mw.statistic:.1f}, p={down_mw.pvalue:.6f} ({'significant' if down_mw.pvalue < 0.05 else 'not significant'})")
+        
+        stat_results_txt.append("\nWithin-genotype comparison (upstream vs downstream):")
+        stat_results_txt.append(f"  {labels[0]}: t={g1_within_ttest.statistic:.3f}, p={g1_within_ttest.pvalue:.6f} ({'significant' if g1_within_ttest.pvalue < 0.05 else 'not significant'})")
+        stat_results_txt.append(f"  {labels[1]}: t={g2_within_ttest.statistic:.3f}, p={g2_within_ttest.pvalue:.6f} ({'significant' if g2_within_ttest.pvalue < 0.05 else 'not significant'})")
+        stat_results_txt.append("\n")
+        
+        # Create grouped bar chart
+        bar_width = 0.35
+        x = np.arange(2)  # Two directions: upstream and downstream
+        
+        # Create bars
+        ax.bar(x - bar_width/2, [g1_up_mean, g1_down_mean], bar_width, 
+               yerr=[g1_up_sem, g1_down_sem], capsize=5,
+               color=[genotype_colors[labels[0]]['upstream'], genotype_colors[labels[0]]['downstream']], 
+               label=labels[0], alpha=0.8)
+        
+        ax.bar(x + bar_width/2, [g2_up_mean, g2_down_mean], bar_width,
+               yerr=[g2_up_sem, g2_down_sem], capsize=5,
+               color=[genotype_colors[labels[1]]['upstream'], genotype_colors[labels[1]]['downstream']], 
+               label=labels[1], alpha=0.8)
+        
+        # Add individual data points
+        jitter_amount = 0.05
+        # Upstream - genotype 1
+        jitter1 = np.random.normal(0, jitter_amount, size=len(g1_upstream))
+        ax.scatter(np.full_like(g1_upstream, x[0] - bar_width/2) + jitter1, g1_upstream, 
+                   color=genotype_colors[labels[0]]['upstream'], alpha=0.4, s=15)
+        
+        # Downstream - genotype 1
+        jitter2 = np.random.normal(0, jitter_amount, size=len(g1_downstream))
+        ax.scatter(np.full_like(g1_downstream, x[1] - bar_width/2) + jitter2, g1_downstream, 
+                   color=genotype_colors[labels[0]]['downstream'], alpha=0.4, s=15)
+        
+        # Upstream - genotype 2
+        jitter3 = np.random.normal(0, jitter_amount, size=len(g2_upstream))
+        ax.scatter(np.full_like(g2_upstream, x[0] + bar_width/2) + jitter3, g2_upstream, 
+                   color=genotype_colors[labels[1]]['upstream'], alpha=0.4, s=15)
+        
+        # Downstream - genotype 2
+        jitter4 = np.random.normal(0, jitter_amount, size=len(g2_downstream))
+        ax.scatter(np.full_like(g2_downstream, x[1] + bar_width/2) + jitter4, g2_downstream, 
+                   color=genotype_colors[labels[1]]['downstream'], alpha=0.4, s=15)
+        
+        # Add significance bars and asterisks for between-genotype comparison
+        y_level = 1.1  # Starting height for significance bars
+        bar_height = 0.05
+        
+        # Function to add significance bars and text
+        def add_significance(x1, x2, y, p_value, ax, text_offset=0.02):
+            if p_value >= 0.05:
+                sig_text = "n.s."
+            elif p_value < 0.001:
+                sig_text = "***"
+            elif p_value < 0.01:
+                sig_text = "**"
+            else:
+                sig_text = "*"
+            
+            # Draw the bar
+            ax.plot([x1, x1, x2, x2], [y, y + bar_height, y + bar_height, y], 'k-', linewidth=1.5)
+            
+            # Add the text
+            ax.text((x1 + x2) / 2, y + bar_height + text_offset, sig_text, 
+                    ha='center', va='bottom', fontsize=12)
+            
+            # Return the new y level
+            return y + bar_height + 0.08
+        
+        # Upstream comparison (between genotypes)
+        if up_ttest.pvalue < 0.1:  # Show even marginally significant results
+            y_level = add_significance(x[0] - bar_width/2, x[0] + bar_width/2, y_level, up_ttest.pvalue, ax)
+        
+        # Downstream comparison (between genotypes)
+        if down_ttest.pvalue < 0.1:
+            y_level = add_significance(x[1] - bar_width/2, x[1] + bar_width/2, y_level, down_ttest.pvalue, ax)
+        
+        # Within-genotype comparison (if both are significant, stack the bars)
+        within_g1_y = 0.96
+        within_g2_y = 0.96
+        
+        if g1_within_ttest.pvalue < 0.1:
+            within_g1_y = add_significance(x[0] - bar_width/2, x[1] - bar_width/2, within_g1_y, g1_within_ttest.pvalue, ax)
+        
+        if g2_within_ttest.pvalue < 0.1:
+            within_g2_y = add_significance(x[0] + bar_width/2, x[1] + bar_width/2, within_g2_y, g2_within_ttest.pvalue, ax)
+        
+        # Add sample sizes to the bars
+        def add_counts(x, y, count, ax, va='bottom'):
+            ax.text(x, y, f"n={count}", ha='center', va=va, fontsize=8, color='black')
+        
+        # Add counts text
+        add_counts(x[0] - bar_width/2, g1_up_mean + g1_up_sem + 0.03, g1_up_count, ax)
+        add_counts(x[1] - bar_width/2, g1_down_mean + g1_down_sem + 0.03, g1_down_count, ax)
+        add_counts(x[0] + bar_width/2, g2_up_mean + g2_up_sem + 0.03, g2_up_count, ax)
+        add_counts(x[1] + bar_width/2, g2_down_mean + g2_down_sem + 0.03, g2_down_count, ax)
+        
+        # Add legend, title, and labels
+        ax.set_ylabel('Cast Probability')
+        ax.set_xticks(x)
+        ax.set_xticklabels(['Upstream', 'Downstream'])
+        ax.set_ylim(0, min(1.5, y_level + 0.1))  # Adjust based on significance bars
+        
+        type_labels = {
+            'large': 'Large Casts',
+            'small': 'Small Casts',
+            'all': 'All Casts'
+        }
+        
+        # Add count of larvae
+        ax.set_title(f"{type_labels.get(cast_type, cast_type.capitalize())}\n{labels[0]}: n={len(g1_upstream)} larvae\n{labels[1]}: n={len(g2_upstream)} larvae")
+        
+        # Reference line at 0.5 (chance level)
+        ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5)
+        
+        # Add legend
+        if ax_idx == 1:  # Only for the first subplot
+            ax.legend(title="Genotype", loc='upper right')
+    
+    # Add overall title
+    fig.suptitle(f'Comparison of Cast Directions When Perpendicular to Flow (±{angle_width}°)', fontsize=14)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.85)
+    
+    # Save figure if basepath is provided
+    if basepath is not None:
+        filepath = os.path.join(basepath, f"cast_direction_comparison_{label1_safe}_vs_{label2_safe}_{timestamp}.svg")
+        plt.savefig(filepath, format='svg', bbox_inches='tight')
+        print(f"Saved comparison plot to: {filepath}")
+    
+    plt.show()
+    
+    # Save statistical results to text file
+    if basepath is not None:
+        txt_filepath = os.path.join(basepath, f"cast_direction_stats_{label1_safe}_vs_{label2_safe}_{timestamp}.txt")
+        with open(txt_filepath, 'w') as f:
+            f.write('\n'.join(stat_results_txt))
+        print(f"Saved statistical results to: {txt_filepath}")
+    
+    # Return results for further analysis
+    return comparison_results
+
+
+def compare_cast_directions_new(genotype1_data, genotype2_data, labels=None, angle_width=5, min_frame=3, basepath=None):
+    """
+    Compare upstream and downstream cast distributions between two genotypes when larvae are perpendicular to flow.
+    Also tests if mean head angle as a function of body orientation differs statistically between groups.
+    
+    Args:
+        genotype1_data (dict): Tracking data dictionary for first genotype
+        genotype2_data (dict): Tracking data dictionary for second genotype
+        labels (tuple): Optional tuple of (label1, label2) for the genotypes
+        angle_width (int): Width of perpendicular orientation sector in degrees
+        min_frame (int): Minimum number of frames to consider for a cast
+        basepath (str): Base path for saving output files
+        
+    Returns:
+        dict: Contains comparison statistics and test results
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy import stats
+    import os
+    from datetime import datetime
+    
+    # Set default labels if not provided
+    if labels is None:
+        labels = ('Genotype 1', 'Genotype 2')
+    
+    # Create safe filenames from labels
+    label1_safe = ''.join(c if c.isalnum() else '_' for c in labels[0])
+    label2_safe = ''.join(c if c.isalnum() else '_' for c in labels[1])
+    
+    # Create timestamp for file names
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Make sure basepath exists
+    if basepath is not None:
+        os.makedirs(basepath, exist_ok=True)
+    
+    # Analyze both genotypes separately
+    print(f"Analyzing {labels[0]}...")
+    genotype1_results = analyze_perpendicular_cast_directions_new(
+        genotype1_data, angle_width=angle_width, min_frame=min_frame, basepath=None)
+    
+    print(f"Analyzing {labels[1]}...")
+    genotype2_results = analyze_perpendicular_cast_directions_new(
+        genotype2_data, angle_width=angle_width, min_frame=min_frame, basepath=None)
+    
+    # Get head angle vs body orientation data for both genotypes
+    # This would typically come from analyze_cast_head_angles_by_orientation or similar function
+    g1_head_angle_results = analyze_cast_head_angles_by_orientation(genotype1_data)
+    g2_head_angle_results = analyze_cast_head_angles_by_orientation(genotype2_data)
+    
+    # Statistical comparison of head angle vs body orientation curves
+    orientation_stats = {}
+    
+    # Get the orientation bins and head angles for both genotypes
+    bin_centers = g1_head_angle_results['bin_centers']
+    
+    # For each cast type (large, small, all)
+    for cast_type in ['large', 'small', 'all']:
+        # Get the smoothed curves for each genotype
+        g1_curve = g1_head_angle_results[f'{cast_type}_smoothed']
+        g2_curve = g2_head_angle_results[f'{cast_type}_smoothed']
+        
+        # Get raw data points (head angles and orientations) for permutation test
+        g1_head_angles = g1_head_angle_results[f'{cast_type}_cast_angles']
+        g1_orientations = g1_head_angle_results[f'{cast_type}_cast_orientations']
+        
+        g2_head_angles = g2_head_angle_results[f'{cast_type}_cast_angles']
+        g2_orientations = g2_head_angle_results[f'{cast_type}_cast_orientations']
+        
+        # Calculate the mean head angle for each genotype
+        g1_mean_angle = np.nanmean(g1_head_angles)
+        g2_mean_angle = np.nanmean(g2_head_angles)
+        
+        # Statistical test for overall head angle difference (t-test and Mann-Whitney)
+        t_stat, t_p = stats.ttest_ind(g1_head_angles, g2_head_angles, equal_var=False)
+        u_stat, mw_p = stats.mannwhitneyu(g1_head_angles, g2_head_angles, alternative='two-sided')
+        
+        # Calculate differences between curves where both have valid data
+        valid_mask = ~np.isnan(g1_curve) & ~np.isnan(g2_curve)
+        diff_curve = g2_curve[valid_mask] - g1_curve[valid_mask]
+        valid_bins = bin_centers[valid_mask]
+        
+        # Calculate mean absolute difference and mean squared difference
+        mean_abs_diff = np.mean(np.abs(diff_curve))
+        mean_sqr_diff = np.mean(diff_curve**2)
+        
+        # Permutation test for curve differences
+        # This tests if the two curves differ significantly
+        # by randomly reassigning data points between genotypes
+        n_permutations = 1000
+        permutation_diffs = np.zeros(n_permutations)
+        
+        # Combine all data points
+        all_angles = np.concatenate([g1_head_angles, g2_head_angles])
+        all_orientations = np.concatenate([g1_orientations, g2_orientations])
+        n1 = len(g1_head_angles)
+        n2 = len(g2_head_angles)
+        
+        for i in range(n_permutations):
+            # Randomly shuffle the data
+            perm_idx = np.random.permutation(len(all_angles))
+            perm_angles = all_angles[perm_idx]
+            perm_orientations = all_orientations[perm_idx]
+            
+            # Split into two groups of original sizes
+            perm_g1_angles = perm_angles[:n1]
+            perm_g1_orientations = perm_orientations[:n1]
+            perm_g2_angles = perm_angles[n1:]
+            perm_g2_orientations = perm_orientations[n1:]
+            
+            # Compute histogram for each group
+            hist1, _ = np.histogram(perm_g1_orientations, bins=36, range=(-180, 180), weights=perm_g1_angles)
+            count1, _ = np.histogram(perm_g1_orientations, bins=36, range=(-180, 180))
+            
+            hist2, _ = np.histogram(perm_g2_orientations, bins=36, range=(-180, 180), weights=perm_g2_angles)
+            count2, _ = np.histogram(perm_g2_orientations, bins=36, range=(-180, 180))
+            
+            # Calculate mean angle in each bin
+            with np.errstate(divide='ignore', invalid='ignore'):
+                perm_mean1 = hist1 / count1
+                perm_mean2 = hist2 / count2
+            
+            # Calculate difference and mean absolute difference
+            perm_valid_mask = ~np.isnan(perm_mean1) & ~np.isnan(perm_mean2)
+            if np.sum(perm_valid_mask) > 0:
+                perm_diff = perm_mean2[perm_valid_mask] - perm_mean1[perm_valid_mask]
+                permutation_diffs[i] = np.mean(np.abs(perm_diff))
+            else:
+                permutation_diffs[i] = 0
+        
+        # Calculate p-value from permutation test
+        perm_p = np.mean(permutation_diffs >= mean_abs_diff)
+        
+        # Store results
+        orientation_stats[cast_type] = {
+            'overall_head_angle': {
+                'g1_mean': g1_mean_angle,
+                'g2_mean': g2_mean_angle,
+                'difference': g2_mean_angle - g1_mean_angle,
+                't_test': {'statistic': t_stat, 'pvalue': t_p},
+                'mannwhitney': {'statistic': u_stat, 'pvalue': mw_p}
+            },
+            'orientation_curves': {
+                'mean_abs_diff': mean_abs_diff,
+                'mean_sqr_diff': mean_sqr_diff,
+                'permutation_test_pvalue': perm_p
+            }
+        }
+    
+    # Create figure to visualize the statistical comparison of orientation curves
+    fig, axs = plt.subplots(1, 3, figsize=(18, 6))
+    
+    for i, cast_type in enumerate(['large', 'small', 'all']):
+        ax = axs[i]
+        
+        # Get the data
+        bin_centers = g1_head_angle_results['bin_centers']
+        g1_curve = g1_head_angle_results[f'{cast_type}_smoothed']
+        g2_curve = g2_head_angle_results[f'{cast_type}_smoothed']
+        
+        # Get the error bars if available
+        g1_sem = g1_head_angle_results.get(f'{cast_type}_sem', np.zeros_like(g1_curve))
+        g2_sem = g2_head_angle_results.get(f'{cast_type}_sem', np.zeros_like(g2_curve))
+        
+        # Plot the curves with error regions
+        ax.plot(bin_centers, g1_curve, color='blue', linewidth=2, label=labels[0])
+        ax.fill_between(bin_centers, g1_curve - g1_sem, g1_curve + g1_sem, color='blue', alpha=0.2)
+        
+        ax.plot(bin_centers, g2_curve, color='red', linewidth=2, label=labels[1])
+        ax.fill_between(bin_centers, g2_curve - g2_sem, g2_curve + g2_sem, color='red', alpha=0.2)
+        
+        # Add reference lines
+        # ax.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+        # ax.axvline(x=0, color='black', linestyle='-', alpha=0.3)
+        ax.axvline(x=90, color='gray', linestyle=':', alpha=0.3)
+        ax.axvline(x=-90, color='gray', linestyle=':', alpha=0.3)
+        
+        # Add statistical test results
+        stats_text = (
+            f"Mean Abs Diff: {orientation_stats[cast_type]['orientation_curves']['mean_abs_diff']:.2f}°\n"
+            f"Permutation p: {orientation_stats[cast_type]['orientation_curves']['permutation_test_pvalue']:.4f}"
+        )
+        
+        # Highlight result with a star if significant
+        is_significant = orientation_stats[cast_type]['orientation_curves']['permutation_test_pvalue'] < 0.05
+        if is_significant:
+            stats_text += " *"
+        
+        ax.text(0.05, 0.95, stats_text, transform=ax.transAxes, 
+                va='top', ha='left', bbox=dict(facecolor='white', alpha=0.8))
+        
+        # Add title
+        title = f"{cast_type.capitalize()} Casts"
+        ax.set_title(title)
+        
+        # Add labels
+        ax.set_xlabel('Body Orientation (°)')
+        ax.set_ylabel('Mean Head Angle (°)')
+        
+        # Add legend
+        ax.legend(loc='lower right')
+        
+        # Set limits
+        ax.set_xlim(-180, 180)
+    
+    plt.tight_layout()
+    plt.suptitle(f'Statistical Comparison of Head Angle vs Body Orientation Curves\n{labels[0]} vs {labels[1]}', 
+                 fontsize=14, y=1.05)
+    
+    # Save figure if basepath is provided
+    if basepath is not None:
+        filepath = os.path.join(basepath, f"head_angle_curves_comparison_{label1_safe}_vs_{label2_safe}_{timestamp}.svg")
+        plt.savefig(filepath, format='svg', bbox_inches='tight')
+        print(f"Saved head angle curves comparison to: {filepath}")
+    
+    plt.show()
+    
+    # Save statistical results to text file
+    if basepath is not None:
+        # Prepare the results text
+        results_text = [
+            f"Statistical Comparison of Head Angle vs Body Orientation: {labels[0]} vs {labels[1]}",
+            f"Analysis timestamp: {timestamp}",
+            "\n"
+        ]
+        
+        for cast_type in ['large', 'small', 'all']:
+            stats_data = orientation_stats[cast_type]
+            
+            results_text.append(f"--- {cast_type.upper()} CASTS ---")
+            
+            # Overall head angle comparison
+            overall = stats_data['overall_head_angle']
+            results_text.append("Overall Head Angle:")
+            results_text.append(f"  {labels[0]} mean: {overall['g1_mean']:.2f}°")
+            results_text.append(f"  {labels[1]} mean: {overall['g2_mean']:.2f}°")
+            results_text.append(f"  Difference: {overall['difference']:.2f}°")
+            results_text.append(f"  t-test: t={overall['t_test']['statistic']:.3f}, p={overall['t_test']['pvalue']:.6f} ({'significant' if overall['t_test']['pvalue'] < 0.05 else 'not significant'})")
+            results_text.append(f"  Mann-Whitney: U={overall['mannwhitney']['statistic']:.1f}, p={overall['mannwhitney']['pvalue']:.6f} ({'significant' if overall['mannwhitney']['pvalue'] < 0.05 else 'not significant'})")
+            
+            # Curve comparison
+            curve = stats_data['orientation_curves']
+            results_text.append("\nOrientation-dependent Curve Comparison:")
+            results_text.append(f"  Mean absolute difference: {curve['mean_abs_diff']:.2f}°")
+            results_text.append(f"  Mean squared difference: {curve['mean_sqr_diff']:.2f}°²")
+            results_text.append(f"  Permutation test p-value: {curve['permutation_test_pvalue']:.6f} ({'significant' if curve['permutation_test_pvalue'] < 0.05 else 'not significant'})")
+            results_text.append("\n")
+        
+        # Write to file
+        txt_filepath = os.path.join(basepath, f"head_angle_curves_stats_{label1_safe}_vs_{label2_safe}_{timestamp}.txt")
+        with open(txt_filepath, 'w') as f:
+            f.write('\n'.join(results_text))
+        print(f"Saved head angle curves statistics to: {txt_filepath}")
+    
+    # Return combined results
+    return {
+        'cast_direction_comparison': {
+            'genotype1': genotype1_results,
+            'genotype2': genotype2_results
+        },
+        'orientation_curve_stats': orientation_stats
     }
