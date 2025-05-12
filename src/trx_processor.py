@@ -4256,7 +4256,7 @@ def plot_larva_angle_vectors(trx_data, larva_id=None, smooth_window=5, time_wind
     from IPython.display import display
     
     # Define visualization parameters
-    FIGURE_SIZE = (14, 7)
+    FIGURE_SIZE = (12, 6)
     LINE_WIDTH = 2
     ARROW_WIDTH = 0.03
     ARROW_HEAD_WIDTH = 0.15
@@ -4297,25 +4297,14 @@ def plot_larva_angle_vectors(trx_data, larva_id=None, smooth_window=5, time_wind
         0° = aligned with negative x-axis (downstream), 180° = aligned with positive x-axis (upstream)
         +90° = pointing right (y-axis), -90° = pointing left (negative y-axis)
         """
-        # Negative x-axis unit vector
-        neg_x_axis = np.array([-1.0, 0.0])
-        
-        # Calculate angle with negative x-axis
         if np.linalg.norm(vector) == 0:
             return np.nan
             
-        # Normalize the vector
-        normalized_v = vector / np.linalg.norm(vector)
+        # Calculate angle with negative x-axis using arctan2
+        # Note: arctan2(y, x) gives angle from positive x-axis, we want from negative x-axis
+        # So we use arctan2(y, -x) or equivalently arctan2(-y, x) + 180°
+        angle_deg = np.degrees(np.arctan2(vector[1], -vector[0]))
         
-        # Calculate angle with negative x-axis using dot product
-        dot_product = np.dot(normalized_v, neg_x_axis)
-        angle_rad = np.arccos(np.clip(dot_product, -1.0, 1.0))
-        angle_deg = np.degrees(angle_rad)
-        
-        # Determine sign based on y-component
-        if normalized_v[1] < 0:
-            angle_deg = -angle_deg
-            
         return angle_deg
     
     # Helper function to smooth data
@@ -4425,14 +4414,14 @@ def plot_larva_angle_vectors(trx_data, larva_id=None, smooth_window=5, time_wind
     bend_arrow = None
     
     # Set up polar plot
-    ax1.set_theta_zero_location('N')  # 0 degrees at the top (North)
-    ax1.set_theta_direction(-1)  # Clockwise
+    ax1.set_theta_zero_location('E')  # 0 degrees at the right (East)
+    ax1.set_theta_direction(1)  # Antilockwise
     ax1.set_rlabel_position(45)  # Move radial labels away from plotted line
-    ax1.set_rticks([0.5, 1.0])  # Less radial ticks
+    ax1.set_rticks([])  # Less radial ticks
     ax1.set_rlim(0, 1.2)  # Set radius limit
     
     # Add cardinal direction labels with upstream/downstream
-    ax1.set_xticklabels(['90°\n(Right)', '45°', '0°\n(Downstream)', '315°', '270°\n(Left)', '225°', '180°\n(Upstream)', '135°'])
+    ax1.set_xticklabels(['90°\n(Right)', '45°', '0°\n(Downstream)', '-45°', '-90°\n(Left)', '-135°', '±180°\n(Upstream)', '135°'])
     
     # Prepare the orientation angle plot (top right)
     ax2.plot(time, orientation_angles_smooth, 'b-', linewidth=1.5)
@@ -4496,7 +4485,9 @@ def plot_larva_angle_vectors(trx_data, larva_id=None, smooth_window=5, time_wind
         bend_angle = angle_upper_lower_deg[frame]
         
         # Convert angles to radians for polar plot
-        orientation_rad = np.radians(orientation_angle)
+        # For polar plots, 0 radians is to the right (east), and angles increase counterclockwise
+        orientation_rad = np.radians(orientation_angle)  # Adjust for polar plot convention
+        bend_rad = np.radians(bend_angle)  # Same adjustment for bend angle
         
         # Remove previous arrows if they exist
         if orientation_arrow:
@@ -4513,15 +4504,9 @@ def plot_larva_angle_vectors(trx_data, larva_id=None, smooth_window=5, time_wind
                                      color=ORIENTATION_COLOR,
                                      zorder=10)
         
-        # Calculate bend angle direction
-        # Adjust bend vector direction based on sign of bend angle
-        if bend_angle >= 0:
-            bend_direction = orientation_rad + np.radians(30)  # 30 degrees clockwise
-        else:
-            bend_direction = orientation_rad - np.radians(30)  # 30 degrees counterclockwise
         
         # Create bend angle arrow with fixed length of 1
-        bend_arrow = ax1.arrow(bend_direction, 0, 0, 1.0,
+        bend_arrow = ax1.arrow(bend_rad, 0, 0, 1.0,
                               alpha=ALPHA, 
                               width=ARROW_WIDTH,
                               head_width=ARROW_HEAD_WIDTH, 
@@ -4548,7 +4533,7 @@ def plot_larva_angle_vectors(trx_data, larva_id=None, smooth_window=5, time_wind
         
         # Update polar plot title with current angles
         ax1.set_title(f"Orientation: {orientation_angle:.1f}°, Bend: {bend_angle:.1f}°\nTime: {current_time:.2f}s", 
-                     fontsize=10)
+                     fontsize=10, pad=35)
         
         fig.canvas.draw_idle()
         return (orientation_arrow, bend_arrow, 
@@ -4595,6 +4580,7 @@ def plot_larva_angle_vectors(trx_data, larva_id=None, smooth_window=5, time_wind
     
     # Add vector legend to polar plot
     ax1.legend(handles=vector_legend, loc='lower left', fontsize=9)
+
     
     # Add reference line legend to orientation plot
     ax2.legend(handles=reference_legend, loc='upper right', fontsize=8)
@@ -4609,11 +4595,6 @@ def plot_larva_angle_vectors(trx_data, larva_id=None, smooth_window=5, time_wind
     # Set y-limits for orientation angle plot
     ax2.set_ylim(-200, 200)
     
-    # Add label annotations to orientation angle plot to clarify directions
-    ax2.text(time_start + 0.05*(time_end-time_start), 0, "Downstream", 
-             verticalalignment='center', fontsize=8, bbox=dict(facecolor='white', alpha=0.7))
-    ax2.text(time_start + 0.05*(time_end-time_start), 180, "Upstream", 
-             verticalalignment='center', fontsize=8, bbox=dict(facecolor='white', alpha=0.7))
     
     # Display title
     fig.suptitle(f'Larva {larva_id} - Angle Vectors and Dynamics', fontsize=14)
@@ -4897,8 +4878,8 @@ def plot_larva_integrated_visualization(trx_data, larva_id=None, smooth_window=5
     bend_arrow = None
     
     # Set up polar plot - make it more compact
-    ax_polar.set_theta_zero_location('N')  # 0 degrees at the top (North)
-    ax_polar.set_theta_direction(-1)  # Clockwise
+    ax_polar.set_theta_zero_location('E')  # 0 degrees at the top (North)
+    ax_polar.set_theta_direction(1)  # Anticlockwise
     ax_polar.set_rlabel_position(45)  # Move radial labels away from plotted line
     ax_polar.set_rticks([0.5, 1.0])  # Less radial ticks
     ax_polar.set_rlim(0, 1.1)  # Set radius limit (slightly smaller)
