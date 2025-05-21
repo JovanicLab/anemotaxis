@@ -59,6 +59,16 @@ def filter_larvae_by_duration(data, min_total_duration=None, percentile=10):
         }
     else:
         return filtered_data
+    
+def filter_by_behavior_type(data, behavior_type, min_count=1):
+    """Filter larvae that have at least min_count instances of a behavior."""
+    # Implementation here...
+    pass
+
+def filter_by_experiment_date(data, start_date, end_date):
+    """Filter data by experiment date range."""
+    # Implementation here...
+    pass
 
 def analyze_behavior_durations(data, show_plot=True, title=None):
     """Analyze behavior durations from processed trx data with separate analysis for large, small, and total behaviors.
@@ -538,6 +548,416 @@ def analyze_behavior_durations(data, show_plot=True, title=None):
     
     return behavior_stats
 
+def plot_behavior_duration_histograms(data, show_plot=True, title=None, 
+                                     bin_width=None, max_value=None, log_scale=False,
+                                     save_path=None):
+    """Plot histograms of behavior durations.
+    
+    Args:
+        data: Either single experiment data (dict) or all experiments data (dict with 'data' key)
+        show_plot: Whether to show visualization (default: True)
+        title: Optional plot title override (default: None)
+        bin_width: Width of histogram bins (default: 0.2 for seconds, 1 for frames)
+        max_value: Maximum value to include in histogram (default: None, auto-calculated per behavior)
+        log_scale: Whether to use log scale for y-axis (default: False)
+        save_path: Path to save the figure (default: None)
+        
+    Returns:
+        dict: Statistics and histogram data for each behavior type
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+    
+    # Define behavior mappings for large_small arrays
+    behavior_mapping = {
+        0: ('large_run', 'run'),
+        1: ('small_run', 'run'),
+        2: ('large_cast', 'cast'),
+        3: ('small_cast', 'cast'),
+        4: ('large_stop', 'stop'),
+        5: ('small_stop', 'stop'),
+        6: ('large_hunch', 'hunch'),
+        7: ('small_hunch', 'hunch'),
+        8: ('large_backup', 'backup'),
+        9: ('small_backup', 'backup'),
+        10: ('large_roll', 'roll'),
+        11: ('small_roll', 'roll')
+    }
+    
+    # Define base color scheme
+    base_behavior_colors = {
+        'run': [0.0, 0.0, 0.0],      # Black
+        'cast': [1.0, 0.0, 0.0],     # Red
+        'stop': [0.0, 1.0, 0.0],     # Green
+        'hunch': [0.0, 0.0, 1.0],    # Blue
+        'backup': [1.0, 0.5, 0.0],   # Orange
+        'roll': [0.5, 0.0, 0.5]      # Purple
+    }
+    
+    # Create color mapping with different shades for large, small, and total behaviors
+    behavior_colors = {}
+    
+    # Add colors for large behaviors (darker)
+    for idx, (behavior_key, base_name) in behavior_mapping.items():
+        if 'large' in behavior_key:
+            behavior_colors[behavior_key] = base_behavior_colors[base_name]
+    
+    # Add colors for small behaviors (pastel versions)
+    for idx, (behavior_key, base_name) in behavior_mapping.items():
+        if 'small' in behavior_key:
+            # Create pastel version (mix with white)
+            color = base_behavior_colors[base_name]
+            pastel_color = [0.7 + 0.3 * c for c in color]  # Mix with white
+            behavior_colors[behavior_key] = pastel_color
+    
+    # Add colors for total behaviors (intermediate shade)
+    for base_name in base_behavior_colors:
+        # Create intermediate shade for total
+        color = base_behavior_colors[base_name]
+        # Make slightly darker than the base color
+        total_color = [max(0, c * 0.8) for c in color]
+        behavior_colors[f"{base_name}_total"] = total_color
+    
+    # Handle data type
+    if 'data' in data:
+        extracted_data = data['data']
+        n_larvae = data['metadata']['total_larvae']
+        if title is None:
+            title = 'All Experiments'
+    else:
+        extracted_data = data
+        n_larvae = len(extracted_data)
+        if title is None:
+            title = 'Multiple Experiments'
+    
+    # Initialize statistics for each behavior group
+    behavior_stats = {}
+    
+    # Initialize all behaviors - large, small, and total
+    for idx, (behavior_key, _) in behavior_mapping.items():
+        behavior_stats[behavior_key] = {
+            'durations': [],
+            'n_actions': 0,
+            'total_duration': 0,
+            'mean_duration': 0,
+            'median_duration': 0,
+            'std_duration': 0,
+            'percent_of_total': 0,
+            'histogram_data': None
+        }
+    
+    # Initialize total behaviors (combined large and small)
+    for base_name in base_behavior_colors:
+        behavior_stats[f"{base_name}_total"] = {
+            'durations': [],
+            'n_actions': 0,
+            'total_duration': 0,
+            'mean_duration': 0,
+            'median_duration': 0,
+            'std_duration': 0,
+            'percent_of_total': 0,
+            'histogram_data': None
+        }
+    
+    # Process each larva
+    total_actions = {'large': 0, 'small': 0, 'total': 0}
+    
+    # Determine if we're using frames (n_duration_large_small) or seconds (duration_large_small)
+    sample_larva = next(iter(extracted_data.values()))
+    using_frames = 'n_duration_large_small' in sample_larva
+    duration_key = 'n_duration_large_small' if using_frames else 'duration_large_small'
+    
+    # Set appropriate bin width based on units
+    if bin_width is None:
+        bin_width = 1 if using_frames else 0.2
+    
+    # Set appropriate unit label
+    unit_label = 'frames' if using_frames else 'seconds'
+    unit_abbr = 'fr' if using_frames else 's'
+    
+    for larva_id, larva_data in extracted_data.items():
+        # Skip if necessary data is not available
+        if duration_key not in larva_data or 'nb_action_large_small' not in larva_data:
+            continue
+            
+        # Get the large_small arrays
+        duration_large_small = larva_data[duration_key]
+        nb_action_large_small = larva_data['nb_action_large_small']
+        
+        # Process all indices from the arrays
+        for idx in range(len(duration_large_small)):
+            if idx >= len(nb_action_large_small):
+                continue
+                
+            # Get behavior mapping for this index
+            if idx not in behavior_mapping:
+                continue
+                
+            behavior_key, base_name = behavior_mapping[idx]
+            
+            # Determine whether this is a large or small behavior
+            if 'large_' in behavior_key:
+                size_group = 'large'
+            else:
+                size_group = 'small'
+            
+            # Get durations and counts
+            durations = duration_large_small[idx]
+            n_actions = nb_action_large_small[idx]
+            
+            if durations is not None and n_actions is not None:
+                # Clean data - remove NaN values
+                n = int(np.nansum(n_actions.flatten()))
+                clean_durations = durations.flatten()[~np.isnan(durations.flatten())]
+                
+                if n > 0 and len(clean_durations) > 0:
+                    # Add to behavior stats
+                    behavior_stats[behavior_key]['n_actions'] += n
+                    behavior_stats[behavior_key]['durations'].extend(clean_durations)
+                    
+                    # Update action counts by size
+                    total_actions[size_group] += n
+                    total_actions['total'] += n
+                    
+                    # Also add to total behavior type
+                    total_key = f"{base_name}_total"
+                    behavior_stats[total_key]['durations'].extend(clean_durations)
+    
+    # Calculate statistics for each behavior
+    for behavior in behavior_stats:
+        stats = behavior_stats[behavior]
+        durations = stats['durations']
+        
+        if durations:
+            # Determine the behavior group
+            if 'large_' in behavior:
+                group_total = total_actions['large']
+            elif 'small_' in behavior:
+                group_total = total_actions['small']
+            else:  # This is a _total behavior
+                group_total = total_actions['total']
+            
+            # Calculate n_actions for total behaviors
+            if behavior.endswith('_total'):
+                base_name = behavior.replace('_total', '')
+                large_key = f"large_{base_name}"
+                small_key = f"small_{base_name}"
+                if large_key in behavior_stats and small_key in behavior_stats:
+                    stats['n_actions'] = (behavior_stats[large_key]['n_actions'] + 
+                                         behavior_stats[small_key]['n_actions'])
+            
+            # Calculate statistics
+            stats.update({
+                'total_duration': float(np.sum(durations)),
+                'mean_duration': float(np.mean(durations)),
+                'median_duration': float(np.median(durations)),
+                'std_duration': float(np.std(durations)),
+                'percent_of_total': 100 * stats['n_actions'] / group_total if group_total > 0 else 0
+            })
+    
+    if show_plot:
+        # Define the base behavior types to plot
+        base_behavior_names = ['run', 'cast', 'stop', 'hunch', 'backup', 'roll']
+        
+        # Filter to only include behaviors with data
+        active_behavior_types = []
+        for base_name in base_behavior_names:
+            large_key = f"large_{base_name}"
+            small_key = f"small_{base_name}"
+            
+            # Check if any variant has data
+            if (large_key in behavior_stats and behavior_stats[large_key]['n_actions'] > 0 or 
+                small_key in behavior_stats and behavior_stats[small_key]['n_actions'] > 0):
+                active_behavior_types.append(base_name)
+        
+        if active_behavior_types:
+            # Set up the figure layout - one row for each behavior type
+            n_behaviors = len(active_behavior_types)
+            fig, axs = plt.subplots(n_behaviors, 3, figsize=(8, 3 * n_behaviors))
+            
+            # Handle case with single behavior (reshape axs)
+            if n_behaviors == 1:
+                axs = np.array([axs])
+            
+            # Plot histograms for each behavior type
+            for i, base_name in enumerate(active_behavior_types):
+                large_key = f"large_{base_name}"
+                small_key = f"small_{base_name}"
+                total_key = f"{base_name}_total"
+                
+                # Get durations
+                large_durations = behavior_stats[large_key]['durations']
+                small_durations = behavior_stats[small_key]['durations']
+                total_durations = behavior_stats[total_key]['durations']
+                
+                # Calculate max durations for each behavior variant with 5% buffer
+                max_large = max(large_durations) * 1.05 if large_durations else 0
+                max_small = max(small_durations) * 1.05 if small_durations else 0
+                max_total = max(total_durations) * 1.05 if total_durations else 0
+                
+                # If a global max_value is provided, use that instead
+                if max_value is not None:
+                    max_large = max_small = max_total = max_value
+                
+                # Generate bins for each histogram individually
+                large_bins = np.arange(0, max_large + bin_width, bin_width) if large_durations else None
+                small_bins = np.arange(0, max_small + bin_width, bin_width) if small_durations else None
+                total_bins = np.arange(0, max_total + bin_width, bin_width) if total_durations else None
+                
+                # Plot large behavior durations
+                if large_durations:
+                    hist_large, bins_large, _ = axs[i, 0].hist(
+                        large_durations, bins=large_bins, alpha=0.7, 
+                        color=behavior_colors[large_key],
+                        label=f"n={len(large_durations)}")
+                    
+                    # Store histogram data
+                    behavior_stats[large_key]['histogram_data'] = {
+                        'counts': hist_large,
+                        'bins': bins_large
+                    }
+                    
+                    # Add mean and median lines
+                    mean_val = behavior_stats[large_key]['mean_duration']
+                    median_val = behavior_stats[large_key]['median_duration']
+                    axs[i, 0].axvline(mean_val, color='k', linestyle='--', 
+                                     label=f'Mean: {mean_val:.2f}{unit_abbr}')
+                    axs[i, 0].axvline(median_val, color='r', linestyle='-', 
+                                     label=f'Median: {median_val:.2f}{unit_abbr}')
+                    
+                    axs[i, 0].set_title(f'Large {base_name.capitalize()} Durations')
+                    axs[i, 0].legend(fontsize='small')
+                    axs[i, 0].set_xlim(0, max_large)
+                else:
+                    axs[i, 0].text(0.5, 0.5, 'No data', ha='center', va='center', 
+                                  transform=axs[i, 0].transAxes)
+                
+                # Plot small behavior durations
+                if small_durations:
+                    hist_small, bins_small, _ = axs[i, 1].hist(
+                        small_durations, bins=small_bins, alpha=0.7, 
+                        color=behavior_colors[small_key], 
+                        label=f"n={len(small_durations)}")
+                    
+                    # Store histogram data
+                    behavior_stats[small_key]['histogram_data'] = {
+                        'counts': hist_small,
+                        'bins': bins_small
+                    }
+                    
+                    # Add mean and median lines
+                    mean_val = behavior_stats[small_key]['mean_duration']
+                    median_val = behavior_stats[small_key]['median_duration']
+                    axs[i, 1].axvline(mean_val, color='k', linestyle='--', 
+                                     label=f'Mean: {mean_val:.2f}{unit_abbr}')
+                    axs[i, 1].axvline(median_val, color='r', linestyle='-', 
+                                     label=f'Median: {median_val:.2f}{unit_abbr}')
+                    
+                    axs[i, 1].set_title(f'Small {base_name.capitalize()} Durations')
+                    axs[i, 1].legend(fontsize='small')
+                    axs[i, 1].set_xlim(0, max_small)
+                else:
+                    axs[i, 1].text(0.5, 0.5, 'No data', ha='center', va='center', 
+                                  transform=axs[i, 1].transAxes)
+                
+                # Plot total behavior durations
+                if total_durations:
+                    hist_total, bins_total, _ = axs[i, 2].hist(
+                        total_durations, bins=total_bins, alpha=0.7, 
+                        color=behavior_colors[total_key],
+                        label=f"n={len(total_durations)}")
+                    
+                    # Store histogram data
+                    behavior_stats[total_key]['histogram_data'] = {
+                        'counts': hist_total,
+                        'bins': bins_total
+                    }
+                    
+                    # Add mean and median lines
+                    mean_val = behavior_stats[total_key]['mean_duration']
+                    median_val = behavior_stats[total_key]['median_duration']
+                    axs[i, 2].axvline(mean_val, color='k', linestyle='--', 
+                                     label=f'Mean: {mean_val:.2f}{unit_abbr}')
+                    axs[i, 2].axvline(median_val, color='r', linestyle='-', 
+                                     label=f'Median: {median_val:.2f}{unit_abbr}')
+                    
+                    axs[i, 2].set_title(f'All {base_name.capitalize()} Durations')
+                    axs[i, 2].legend(fontsize='small')
+                    axs[i, 2].set_xlim(0, max_total)
+                else:
+                    axs[i, 2].text(0.5, 0.5, 'No data', ha='center', va='center', 
+                                  transform=axs[i, 2].transAxes)
+                
+                # Set x and y labels for each row's plots
+                for j in range(3):
+                    if i == n_behaviors - 1:  # Only add x labels to bottom row
+                        axs[i, j].set_xlabel(f'Duration ({unit_label})')
+                    axs[i, j].set_ylabel('Count')
+                    
+                    # Apply log scale if requested
+                    if log_scale:
+                        axs[i, j].set_yscale('log')
+                    
+                    # Remove top and right spines
+                    axs[i, j].spines['top'].set_visible(False)
+                    axs[i, j].spines['right'].set_visible(False)
+            
+            # Add a super title
+            units_info = " in frames" if using_frames else ""
+            fig.suptitle(f"Behavior Duration Distributions{units_info} - {title}\n(n = {n_larvae} larvae)", 
+                        fontsize=14)
+            
+            plt.tight_layout()
+            plt.subplots_adjust(top=0.92)  # Make room for suptitle
+            
+            # Save the figure if path provided
+            if save_path:
+                plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            
+            plt.show()
+            
+    # Print summary statistics for each group
+    for group_name, prefix in [
+        ('Large Behaviors', 'large_'), 
+        ('Small Behaviors', 'small_'),
+        ('Total Behaviors', '_total')
+    ]:
+        # Get relevant behaviors for this group
+        if prefix == '_total':
+            behaviors = [f"{base}_total" for base in base_behavior_names]
+        else:
+            behaviors = [f"{prefix}{base}" for base in base_behavior_names]
+            
+        # Filter behaviors with data
+        behaviors = [b for b in behaviors if b in behavior_stats and behavior_stats[b]['durations']]
+        
+        if behaviors:
+            # Calculate group total actions
+            group_key = 'large' if prefix == 'large_' else 'small' if prefix == 'small_' else 'total'
+            group_total_actions = total_actions.get(group_key, 0)
+            
+            print(f"\n{group_name} duration analysis ({unit_label}) for {title}")
+            print(f"Number of larvae: {n_larvae}")
+            print(f"Total actions: {group_total_actions}\n")
+            print(f"{'Behavior':>12} {'Events':>8} {'%Total':>7} {'Mean':>10} {'Median':>10} {'Std':>10}")
+            print("-" * 70)
+            
+            for behavior in behaviors:
+                stats = behavior_stats[behavior]
+                if stats['durations']:
+                    # Get readable name
+                    if prefix == '_total':
+                        display_name = behavior.replace('_total', '')
+                    else:
+                        display_name = behavior.replace(prefix, '')
+                    
+                    print(f"{display_name:>12}: {stats['n_actions']:8d} {stats['percent_of_total']:6.1f}%"
+                          f"{stats['mean_duration']:10.2f} {stats['median_duration']:10.2f} {stats['std_duration']:10.2f}")
+    
+    return behavior_stats
+
+
 def plot_global_behavior_matrix(trx_data, show_separate_totals=True):
     """
     Plot global behavior using the global state.
@@ -675,7 +1095,7 @@ def plot_global_behavior_matrix(trx_data, show_separate_totals=True):
             behavior_matrix[row_total] = total_behaviors
 
     # Create the plot
-    plt.figure(figsize=(12, max(6, n_larvae * (3 if show_separate_totals else 1) * 0.4)))
+    plt.figure(figsize=(8, min(6, n_larvae * (3 if show_separate_totals else 1) * 0.4)))
     plt.imshow(behavior_matrix, aspect='auto', interpolation='nearest', alpha=0.8,
                extent=[min_time, max_time, behavior_matrix.shape[0], 0])
     
@@ -746,6 +1166,304 @@ def plot_global_behavior_matrix(trx_data, show_separate_totals=True):
     plt.show()
     
     return behavior_matrix
+
+def plot_behavior_matrices_for_all_dates(base_path, show_separate_totals=False, min_duration=300,
+                                         fig_size=(15, 10), max_dates=None):
+    """
+    Process all trx.mat files in date subfolders and create a grid of behavior matrices.
+    
+    Args:
+        base_path: Base directory containing date subfolders with trx.mat files
+        show_separate_totals: If True, show large, small, and total behaviors as separate rows
+        min_duration: Minimum duration (in seconds) for filtering larvae
+        fig_size: Size of the figure (width, height)
+        max_dates: Maximum number of dates to process (None for all)
+    """
+    import os
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+    import src.data_loader as data_loader
+    import src.processor as processor
+    
+    # Find all trx.mat files in the base path
+    all_trx_paths = []
+    for root, dirs, files in os.walk(base_path):
+        if 'trx.mat' in files:
+            # Extract date name from folder
+            date_name = os.path.basename(root)
+            trx_path = os.path.join(root, "trx.mat")
+            all_trx_paths.append((date_name, trx_path))
+    
+    # Limit to max_dates if specified
+    if max_dates is not None:
+        all_trx_paths = all_trx_paths[:max_dates]
+    
+    # Calculate grid dimensions based on number of files
+    n_dates = len(all_trx_paths)
+    if n_dates == 0:
+        print("No trx.mat files found!")
+        return
+    
+    # Calculate a reasonable grid layout
+    n_cols = min(3, n_dates)  # Maximum 3 columns
+    n_rows = (n_dates + n_cols - 1) // n_cols  # Ceiling division
+    
+    # Create figure with GridSpec for flexible layout
+    fig = plt.figure(figsize=fig_size)
+    gs = GridSpec(n_rows, n_cols, figure=fig)
+    
+    # Process each date and create a subplot
+    for i, (date_name, trx_path) in enumerate(all_trx_paths):
+        print(date_name)
+        row = i // n_cols
+        col = i % n_cols
+        
+        # Create subplot
+        ax = fig.add_subplot(gs[row, col])
+        
+        try:
+            print(f"Processing {trx_path}")
+            
+            # Process the data using your data_loader functions
+            date_str, extracted_data, metadata = data_loader.process_single_file(trx_path)
+            
+            # Filter the data
+            filtered_data = processor.filter_larvae_by_duration(extracted_data, min_total_duration=min_duration)
+            
+            # Get number of larvae after filtering
+            n_larvae = len(filtered_data)
+            
+            if n_larvae > 0:
+                # Create a modified version of plot_global_behavior_matrix that doesn't show the plot
+                # but returns the behavior matrix and other plotting elements
+                behavior_matrix, extent = _create_behavior_matrix(filtered_data, show_separate_totals)
+                
+                # Show the matrix in this subplot
+                ax.imshow(behavior_matrix, aspect='auto', interpolation='nearest', 
+                         alpha=0.8, extent=extent)
+                
+                # Set title and labels
+                ax.set_title(f"{date_name} (n={n_larvae})", fontsize=10)
+                
+                # Only add x and y labels on the outer edges of the grid
+                if row == n_rows - 1:  # Bottom row
+                    ax.set_xlabel('Time (s)', fontsize=8)
+                else:
+                    ax.set_xticklabels([])
+                
+                if col == 0:  # Leftmost column
+                    ax.set_ylabel('Larvae', fontsize=8)
+                else:
+                    ax.set_yticklabels([])
+                
+                # Minimize ticks for cleaner appearance
+                ax.tick_params(axis='both', which='major', labelsize=6)
+            else:
+                ax.text(0.5, 0.5, f"No data for {date_name}\nafter filtering", 
+                       ha='center', va='center', transform=ax.transAxes)
+        
+        except Exception as e:
+            print(f"Error processing {trx_path}: {str(e)}")
+            ax.text(0.5, 0.5, f"Error processing\n{date_name}", 
+                   ha='center', va='center', transform=ax.transAxes, color='red')
+    
+    # Create a common legend in a separate subplot
+    if n_dates > 0:
+        legend_ax = fig.add_subplot(gs[n_rows-1, n_cols-1])
+        _add_behavior_legend(legend_ax, show_separate_totals)
+    
+    fig.suptitle(f"Behavior Matrices - {os.path.basename(base_path)}", fontsize=14)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.92)  # Make room for suptitle
+    plt.show()
+
+# Helper function to create the behavior matrix without showing it
+def _create_behavior_matrix(trx_data, show_separate_totals=False):
+    """Create behavior matrix without plotting - returns matrix and extent."""
+    import numpy as np
+    
+    # Get sorted larva IDs
+    larva_ids = sorted(trx_data.keys())
+    n_larvae = len(larva_ids)
+    
+    # Compute time range
+    tmins = [np.min(trx_data[lid]['t']) for lid in larva_ids if len(trx_data[lid]['t']) > 0]
+    tmaxs = [np.max(trx_data[lid]['t']) for lid in larva_ids if len(trx_data[lid]['t']) > 0]
+    if not tmins or not tmaxs:
+        raise ValueError("No time data found!")
+    min_time = float(min(tmins))
+    max_time = float(max(tmaxs))
+    
+    resolution = 500  # Reduced for subplots
+    
+    # Define state value mapping (both integer and half-integer values)
+    state_mapping = {
+        # Large behaviors (integer values)
+        1.0: {'name': 'large_run', 'base': 'run', 'color': [0.0, 0.0, 0.0]},      # Black
+        2.0: {'name': 'large_cast', 'base': 'cast', 'color': [1.0, 0.0, 0.0]},     # Red
+        3.0: {'name': 'large_stop', 'base': 'stop', 'color': [0.0, 1.0, 0.0]},     # Green
+        4.0: {'name': 'large_hunch', 'base': 'hunch', 'color': [0.0, 0.0, 1.0]},    # Blue
+        5.0: {'name': 'large_backup', 'base': 'backup', 'color': [1.0, 0.5, 0.0]},   # Orange
+        6.0: {'name': 'large_roll', 'base': 'roll', 'color': [0.5, 0.0, 0.5]},     # Purple
+        
+        # Small behaviors (half-integer values)
+        0.5: {'name': 'small_run', 'base': 'run', 'color': [0.7, 0.7, 0.7]},      # Light gray
+        1.5: {'name': 'small_cast', 'base': 'cast', 'color': [1.0, 0.7, 0.7]},     # Light red
+        2.5: {'name': 'small_stop', 'base': 'stop', 'color': [0.7, 1.0, 0.7]},     # Light green
+        3.5: {'name': 'small_hunch', 'base': 'hunch', 'color': [0.7, 0.7, 1.0]},    # Light blue
+        4.5: {'name': 'small_backup', 'base': 'backup', 'color': [1.0, 0.8, 0.6]},   # Light orange
+        5.5: {'name': 'small_roll', 'base': 'roll', 'color': [0.8, 0.6, 0.8]}      # Light purple
+    }
+    
+    # Define total behavior colors (medium shade between large and small)
+    total_behavior_colors = {
+        'run': [0.4, 0.4, 0.4],       # Medium gray
+        'cast': [0.8, 0.3, 0.3],      # Medium red
+        'stop': [0.3, 0.8, 0.3],      # Medium green
+        'hunch': [0.3, 0.3, 0.8],     # Medium blue
+        'backup': [0.8, 0.6, 0.3],    # Medium orange
+        'roll': [0.6, 0.3, 0.6]       # Medium purple
+    }
+
+    if show_separate_totals:
+        # Create 3 rows per larva: large, small, total
+        behavior_matrix = np.full((n_larvae * 3, resolution, 3), fill_value=1.0)  # white background
+    else:
+        # Create 1 row per larva
+        behavior_matrix = np.full((n_larvae, resolution, 3), fill_value=1.0)  # white background
+
+    # Process each larva
+    for larva_idx, lid in enumerate(larva_ids):
+        # Get time and state data
+        larva_time = np.array(trx_data[lid]['t']).flatten()
+        
+        # Use global_state_small_large_state if available, otherwise use global_state_large_state
+        if 'global_state_small_large_state' in trx_data[lid]:
+            states = np.array(trx_data[lid]['global_state_small_large_state']).flatten()
+        else:
+            states = np.array(trx_data[lid]['global_state_large_state']).flatten()
+        
+        # Convert times to indices
+        time_indices = np.floor(
+            ((larva_time - min_time) / (max_time - min_time) * (resolution - 1))
+        ).astype(int)
+        time_indices = np.clip(time_indices, 0, resolution - 1)
+
+        # Arrays to store large, small and total behaviors
+        large_behaviors = np.full((resolution, 3), fill_value=1.0)  # white background
+        small_behaviors = np.full((resolution, 3), fill_value=1.0)  # white background
+        total_behaviors = np.full((resolution, 3), fill_value=1.0)  # white background
+        
+        # For each unique time index, use the corresponding state
+        unique_indices = np.unique(time_indices)
+        for t_idx in unique_indices:
+            mask = time_indices == t_idx
+            if np.any(mask):
+                state_val = float(states[mask][0])  # Take first state if multiple exist
+                
+                # Round to nearest 0.5 to handle potential floating point issues
+                state_val = round(state_val * 2) / 2
+                
+                # Determine if this is a large or small behavior
+                is_large = state_val.is_integer()
+                is_small = not is_large
+                
+                # Assign colors based on state
+                if state_val in state_mapping:
+                    behavior_info = state_mapping[state_val]
+                    
+                    if is_large:
+                        large_behaviors[t_idx] = behavior_info['color']
+                        total_behaviors[t_idx] = total_behavior_colors[behavior_info['base']]
+                    elif is_small:
+                        small_behaviors[t_idx] = behavior_info['color']
+                        total_behaviors[t_idx] = total_behavior_colors[behavior_info['base']]
+                        
+                    # If not showing separate totals, just use the state color directly
+                    if not show_separate_totals:
+                        behavior_matrix[larva_idx, t_idx] = behavior_info['color']
+        
+        # If showing separate totals, assign the arrays to the behavior matrix
+        if show_separate_totals:
+            row_large = larva_idx * 3
+            row_small = larva_idx * 3 + 1
+            row_total = larva_idx * 3 + 2
+            
+            behavior_matrix[row_large] = large_behaviors
+            behavior_matrix[row_small] = small_behaviors
+            behavior_matrix[row_total] = total_behaviors
+    
+    extent = [min_time, max_time, behavior_matrix.shape[0], 0]
+    return behavior_matrix, extent
+
+# Helper function to add a legend
+def _add_behavior_legend(ax, show_separate_totals=False):
+    """Add a behavioral state legend to the given axis."""
+    from matplotlib.patches import Patch
+    
+    # Define colors for behaviors
+    behavior_colors = {
+        'run_large': [0.0, 0.0, 0.0],
+        'cast_large': [1.0, 0.0, 0.0],
+        'stop_large': [0.0, 1.0, 0.0],
+        'hunch_large': [0.0, 0.0, 1.0],
+        'backup_large': [1.0, 0.5, 0.0],
+        'roll_large': [0.5, 0.0, 0.5],
+        'run_small': [0.7, 0.7, 0.7],
+        'cast_small': [1.0, 0.7, 0.7],
+        'stop_small': [0.7, 1.0, 0.7],
+        'hunch_small': [0.7, 0.7, 1.0],
+        'backup_small': [1.0, 0.8, 0.6],
+        'roll_small': [0.8, 0.6, 0.8],
+        'run_total': [0.4, 0.4, 0.4],
+        'cast_total': [0.8, 0.3, 0.3],
+        'stop_total': [0.3, 0.8, 0.3],
+        'hunch_total': [0.3, 0.3, 0.8],
+        'backup_total': [0.8, 0.6, 0.3],
+        'roll_total': [0.6, 0.3, 0.6]
+    }
+    
+    # Create legend elements
+    legend_elements = []
+    
+    # Add behaviors based on show_separate_totals
+    if show_separate_totals:
+        # Add large behaviors
+        for behavior in ['run', 'cast', 'stop', 'hunch', 'backup', 'roll']:
+            legend_elements.append(
+                Patch(facecolor=behavior_colors[f'{behavior}_large'], 
+                      label=f"{behavior} (large)")
+            )
+        
+        # Add small behaviors
+        for behavior in ['run', 'cast', 'stop', 'hunch', 'backup', 'roll']:
+            legend_elements.append(
+                Patch(facecolor=behavior_colors[f'{behavior}_small'], 
+                      label=f"{behavior} (small)")
+            )
+        
+        # Add total behaviors
+        for behavior in ['run', 'cast', 'stop', 'hunch', 'backup', 'roll']:
+            legend_elements.append(
+                Patch(facecolor=behavior_colors[f'{behavior}_total'], 
+                      label=f"{behavior} (total)")
+            )
+    else:
+        # Just show all behaviors without large/small/total distinction
+        for behavior in ['run', 'cast', 'stop', 'hunch', 'backup', 'roll']:
+            legend_elements.append(
+                Patch(facecolor=behavior_colors[f'{behavior}_large'], 
+                      label=behavior)
+            )
+    
+    # Add "Other" category
+    legend_elements.append(Patch(facecolor=[1, 1, 1], label='Other'))
+    
+    # Create the legend
+    ax.legend(handles=legend_elements, loc='center', fontsize='small')
+    ax.axis('off')  # Hide the axis
+
 
 def plot_behavioral_contour_with_global_trajectory(trx_data, larva_id):
     """
@@ -1652,6 +2370,378 @@ def analyze_turn_rate_by_orientation(trx_data, larva_id=None, bin_width=10):
         'all_turn_count': int(all_turn_count)
     }
 
+def analyze_turn_rate_by_orientation_new(trx_data, larva_id=None, bin_width=10, 
+                                    smooth_window=5, jump_threshold=15, 
+                                    peak_threshold=5, peak_prominence=3):
+    """
+    Calculate turn rate as a function of orientation for large turns, small turns, and all turns,
+    using peak detection for more accurate cast identification.
+    
+    Args:
+        trx_data: Dictionary containing tracking data
+        larva_id: Optional specific larva to analyze. If None, analyzes all larvae
+        bin_width: Width of orientation bins in degrees
+        smooth_window: Window size for smoothing angle data
+        jump_threshold: Threshold for detecting orientation jumps in degrees/frame
+        peak_threshold: Minimum height for a bend angle peak to be considered a cast
+        peak_prominence: Minimum prominence for peak detection
+        
+    Returns:
+        dict: Contains turn rates and orientation bins for large, small, and all turns
+    """
+    import numpy as np
+    from scipy.ndimage import gaussian_filter1d
+    from scipy.signal import find_peaks
+    import matplotlib.pyplot as plt
+    
+    def get_orientations_and_states(larva_data):
+        """Extract orientations, bend angles, and turn states for large and small turns."""
+        # Calculate orientation
+        x_center = np.array(larva_data['x_center']).flatten()
+        y_center = np.array(larva_data['y_center']).flatten()
+        x_tail = np.array(larva_data['x_spine'])[-1].flatten()
+        y_tail = np.array(larva_data['y_spine'])[-1].flatten()
+        
+        tail_to_center = np.column_stack([x_center - x_tail, y_center - y_tail])
+        # Calculate orientations in degrees
+        orientations = np.degrees(np.arctan2(tail_to_center[:, 1], tail_to_center[:, 0]))
+        
+        # Get upper-lower bend angle
+        if 'angle_upper_lower_smooth_5' in larva_data:
+            angle_upper_lower = np.array(larva_data['angle_upper_lower_smooth_5']).flatten()
+            angle_upper_lower_deg = np.degrees(angle_upper_lower)
+        else:
+            # If bend angle data is missing, use zeros (this will rely on state labels only)
+            angle_upper_lower_deg = np.zeros_like(orientations)
+        
+        # Get casting/turning states
+        # Check if small_large_state is available
+        if 'global_state_small_large_state' in larva_data:
+            states = np.array(larva_data['global_state_small_large_state']).flatten()
+            # Define masks for large turns (state = 2.0) and small turns (state = 1.5)
+            is_large_turn = states == 2.0
+            is_small_turn = states == 1.5
+            is_any_turn = is_large_turn | is_small_turn
+        else:
+            # Fall back to regular large_state if small_large_state isn't available
+            states = np.array(larva_data['global_state_large_state']).flatten()
+            # With just large state, only state 2 is turn/cast
+            is_large_turn = states == 2
+            is_small_turn = np.zeros_like(states, dtype=bool)  # No small turns
+            is_any_turn = is_large_turn
+        
+        return orientations, angle_upper_lower_deg, is_large_turn, is_small_turn, is_any_turn
+    
+    def detect_turn_peaks(orientations, bend_angles, is_turn, smooth_window, peak_threshold, peak_prominence):
+        """Detect actual peaks in bend angles during turns."""
+        # Apply smoothing to bend angles
+        bend_angles_smooth = gaussian_filter1d(bend_angles, sigma=smooth_window/3.0)
+        
+        # Calculate angle derivative to find slope changes
+        bend_angle_diff = np.diff(bend_angles_smooth)
+        # Add zero at the beginning to match length
+        bend_angle_diff = np.insert(bend_angle_diff, 0, 0)
+        
+        # Find peaks in absolute bend angles during turn segments
+        peak_mask = np.zeros_like(is_turn, dtype=bool)
+        
+        # Find continuous segments of turns
+        turn_segments = []
+        in_turn = False
+        turn_start = 0
+        
+        for i in range(len(is_turn)):
+            if is_turn[i] and not in_turn:
+                # Start of a new turn
+                in_turn = True
+                turn_start = i
+            elif not is_turn[i] and in_turn:
+                # End of a turn
+                in_turn = False
+                if i - turn_start >= 3:  # Require at least 3 frames
+                    turn_segments.append((turn_start, i))
+        
+        # Handle case when still in turn at end of data
+        if in_turn and len(is_turn) - turn_start >= 3:
+            turn_segments.append((turn_start, len(is_turn)))
+        
+        # Process each turn segment to find peaks
+        for start, end in turn_segments:
+            segment_angles = bend_angles_smooth[start:end]
+            
+            # Find peaks in absolute bend angles
+            abs_angles = np.abs(segment_angles)
+            peak_indices, _ = find_peaks(
+                abs_angles, 
+                height=peak_threshold,
+                prominence=peak_prominence,
+                distance=3
+            )
+            
+            # Mark the peaks in the original array
+            for idx in peak_indices:
+                if start + idx < len(peak_mask):
+                    peak_mask[start + idx] = True
+        
+        # Return the orientations at peak times and the peak mask
+        return orientations[peak_mask], peak_mask
+    
+    # Initialize storage for state-based and peak-based analyses
+    all_orientations = []
+    large_turn_states = []
+    small_turn_states = []
+    all_turn_states = []
+    
+    large_peak_orientations = []
+    small_peak_orientations = []
+    all_peak_orientations = []
+    
+    # Process data
+    if larva_id is not None:
+        # Single larva analysis
+        larva_data = trx_data[larva_id]
+        if 'data' in larva_data:
+            larva_data = larva_data['data']
+            
+        orientations, bend_angles, is_large, is_small, is_any = get_orientations_and_states(larva_data)
+        
+        # Store state-based data
+        all_orientations.extend(orientations)
+        large_turn_states.extend(is_large)
+        small_turn_states.extend(is_small)
+        all_turn_states.extend(is_any)
+        
+        # Detect peaks for each turn type
+        large_peaks, large_peak_mask = detect_turn_peaks(
+            orientations, bend_angles, is_large, smooth_window, peak_threshold, peak_prominence)
+        small_peaks, small_peak_mask = detect_turn_peaks(
+            orientations, bend_angles, is_small, smooth_window, peak_threshold, peak_prominence)
+        all_peaks, all_peak_mask = detect_turn_peaks(
+            orientations, bend_angles, is_any, smooth_window, peak_threshold, peak_prominence)
+        
+        # Store peak-based orientations
+        large_peak_orientations.extend(large_peaks)
+        small_peak_orientations.extend(small_peaks)
+        all_peak_orientations.extend(all_peaks)
+        
+        n_larvae = 1
+        title = f'Larva {larva_id} - Cast Probability'
+    else:
+        # All larvae analysis
+        if 'data' in trx_data:
+            data_to_process = trx_data['data']
+            n_larvae = trx_data['metadata']['total_larvae']
+        else:
+            data_to_process = trx_data
+            n_larvae = len(data_to_process)
+            
+        for larva_id, larva_data in data_to_process.items():
+            try:
+                if 'data' in larva_data:
+                    larva_data = larva_data['data']
+                    
+                orientations, bend_angles, is_large, is_small, is_any = get_orientations_and_states(larva_data)
+                
+                # Store state-based data
+                all_orientations.extend(orientations)
+                large_turn_states.extend(is_large)
+                small_turn_states.extend(is_small)
+                all_turn_states.extend(is_any)
+                
+                # Detect peaks for each turn type
+                large_peaks, large_peak_mask = detect_turn_peaks(
+                    orientations, bend_angles, is_large, smooth_window, peak_threshold, peak_prominence)
+                small_peaks, small_peak_mask = detect_turn_peaks(
+                    orientations, bend_angles, is_small, smooth_window, peak_threshold, peak_prominence)
+                all_peaks, all_peak_mask = detect_turn_peaks(
+                    orientations, bend_angles, is_any, smooth_window, peak_threshold, peak_prominence)
+                
+                # Store peak-based orientations
+                large_peak_orientations.extend(large_peaks)
+                small_peak_orientations.extend(small_peaks)
+                all_peak_orientations.extend(all_peaks)
+            except Exception as e:
+                print(f"Error processing larva {larva_id}: {str(e)}")
+                continue
+                
+        title = f'Cast Probability (n={n_larvae})'
+    
+    # Convert to numpy arrays
+    all_orientations = np.array(all_orientations)
+    large_turn_states = np.array(large_turn_states)
+    small_turn_states = np.array(small_turn_states)
+    all_turn_states = np.array(all_turn_states)
+    
+    large_peak_orientations = np.array(large_peak_orientations)
+    small_peak_orientations = np.array(small_peak_orientations)
+    all_peak_orientations = np.array(all_peak_orientations)
+    
+    # Create orientation bins
+    bins = np.arange(-180, 181, bin_width)
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+    
+    # Calculate turn rates for each bin and turn type (state-based)
+    large_turn_rates = []
+    small_turn_rates = []
+    all_turn_rates = []
+    
+    for i in range(len(bins)-1):
+        mask = (all_orientations >= bins[i]) & (all_orientations < bins[i+1])
+        if np.sum(mask) > 0:
+            large_turn_rates.append(np.mean(large_turn_states[mask]))
+            small_turn_rates.append(np.mean(small_turn_states[mask]))
+            all_turn_rates.append(np.mean(all_turn_states[mask]))
+        else:
+            large_turn_rates.append(0)
+            small_turn_rates.append(0)
+            all_turn_rates.append(0)
+    
+    # Calculate peak-based distributions
+    large_peak_distribution = np.zeros(len(bin_centers))
+    small_peak_distribution = np.zeros(len(bin_centers))
+    all_peak_distribution = np.zeros(len(bin_centers))
+    
+    # Count peaks in each bin
+    for i in range(len(bins)-1):
+        # For large casts
+        if len(large_peak_orientations) > 0:
+            mask = (large_peak_orientations >= bins[i]) & (large_peak_orientations < bins[i+1])
+            large_peak_distribution[i] = np.sum(mask)
+        
+        # For small casts
+        if len(small_peak_orientations) > 0:
+            mask = (small_peak_orientations >= bins[i]) & (small_peak_orientations < bins[i+1])
+            small_peak_distribution[i] = np.sum(mask)
+        
+        # For all casts
+        if len(all_peak_orientations) > 0:
+            mask = (all_peak_orientations >= bins[i]) & (all_peak_orientations < bins[i+1])
+            all_peak_distribution[i] = np.sum(mask)
+    
+    # Normalize distributions if we have peaks
+    if np.sum(large_peak_distribution) > 0:
+        large_peak_distribution = large_peak_distribution / np.sum(large_peak_distribution)
+    if np.sum(small_peak_distribution) > 0:
+        small_peak_distribution = small_peak_distribution / np.sum(small_peak_distribution)
+    if np.sum(all_peak_distribution) > 0:
+        all_peak_distribution = all_peak_distribution / np.sum(all_peak_distribution)
+    
+    # Apply smoothing to both state-based rates and peak-based distributions
+    large_turn_rates = np.array(large_turn_rates)
+    small_turn_rates = np.array(small_turn_rates)
+    all_turn_rates = np.array(all_turn_rates)
+    
+    state_large_smoothed = gaussian_filter1d(large_turn_rates, sigma=1)
+    state_small_smoothed = gaussian_filter1d(small_turn_rates, sigma=1)
+    state_all_smoothed = gaussian_filter1d(all_turn_rates, sigma=1)
+    
+    peak_large_smoothed = gaussian_filter1d(large_peak_distribution, sigma=1)
+    peak_small_smoothed = gaussian_filter1d(small_peak_distribution, sigma=1)
+    peak_all_smoothed = gaussian_filter1d(all_peak_distribution, sigma=1)
+    
+    # Create figure with two rows of subplots: state-based and peak-based
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    
+    # Plot 1: Large turn peaks
+    axes[0].plot(bin_centers, large_peak_distribution, 'k-', alpha=0.3, linewidth=1)
+    axes[0].plot(bin_centers, peak_large_smoothed, 'r-', linewidth=2)
+    axes[0].set_xlabel('Orientation (°)')
+    axes[0].set_ylabel('Relative frequency')
+    axes[0].set_xlim(-180, 180)
+    axes[0].set_title(f'Large Casts (n={len(large_peak_orientations)})')
+    
+    # Plot 2: Small turn peaks
+    axes[1].plot(bin_centers, small_peak_distribution, 'k-', alpha=0.3, linewidth=1)
+    axes[1].plot(bin_centers, peak_small_smoothed, 'b-', linewidth=2)
+    axes[1].set_xlabel('Orientation (°)')
+    axes[1].set_ylabel('Relative frequency')
+    axes[1].set_xlim(-180, 180)
+    axes[1].set_title(f'Small Casts (n={len(small_peak_orientations)})')
+    
+    # Plot 3: All turn peaks
+    axes[2].plot(bin_centers, all_peak_distribution, 'k-', alpha=0.3, linewidth=1)
+    axes[2].plot(bin_centers, peak_all_smoothed, 'g-', linewidth=2)
+    axes[2].set_xlabel('Orientation (°)')
+    axes[2].set_ylabel('Relative frequency')
+    axes[2].set_xlim(-180, 180)
+    axes[2].set_title(f'All Casts (n={len(all_peak_orientations)})')
+    
+    # Add reference lines for upstream/downstream orientation
+    for ax in axes:
+        ax.axvline(x=0, color='gray', linestyle='--', alpha=0.3, label='Downstream')
+        ax.axvline(x=180, color='gray', linestyle='--', alpha=0.3, label='Upstream')
+        ax.axvline(x=-180, color='gray', linestyle='--', alpha=0.3)
+    
+    # Add super title
+    plt.suptitle(f'Peak-Based Cast Probability (n={n_larvae} larvae)', fontsize=14)
+    
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.85)  # Make room for the suptitle
+    plt.show()
+    
+    # Create combined comparison plot
+    plt.figure(figsize=(6, 4))
+    
+    if len(large_peak_orientations) > 0:
+        plt.plot(bin_centers, peak_large_smoothed, 'r-', linewidth=2, label='Large casts')
+    
+    if len(small_peak_orientations) > 0:
+        plt.plot(bin_centers, peak_small_smoothed, 'b-', linewidth=2, label='Small casts')
+    
+    if len(all_peak_orientations) > 0:
+        plt.plot(bin_centers, peak_all_smoothed, 'g-', linewidth=2, label='All casts')
+    
+    plt.xlabel('Orientation (°)')
+    plt.ylabel('Relative frequency')
+    plt.xlim(-180, 180)
+    plt.title(f'Peak-Based Cast Distribution (n={n_larvae} larvae)')
+    plt.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=180, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=-180, color='gray', linestyle='--', alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    
+    
+    # Calculate counts and frequencies for statistical comparison
+    large_turn_count = np.sum(large_turn_states)
+    small_turn_count = np.sum(small_turn_states)
+    all_turn_count = np.sum(all_turn_states)
+    
+    return {
+        # State-based analysis
+        'orientations': all_orientations,
+        'large_turn_states': large_turn_states,
+        'small_turn_states': small_turn_states,
+        'all_turn_states': all_turn_states,
+        'bin_centers': bin_centers,
+        'large_turn_rates': large_turn_rates,
+        'small_turn_rates': small_turn_rates,
+        'all_turn_rates': all_turn_rates,
+        'state_large_smoothed': state_large_smoothed,
+        'state_small_smoothed': state_small_smoothed,
+        'state_all_smoothed': state_all_smoothed,
+        
+        # Peak-based analysis
+        'large_peak_orientations': large_peak_orientations,
+        'small_peak_orientations': small_peak_orientations,
+        'all_peak_orientations': all_peak_orientations,
+        'large_peak_distribution': large_peak_distribution,
+        'small_peak_distribution': small_peak_distribution,
+        'all_peak_distribution': all_peak_distribution,
+        'peak_large_smoothed': peak_large_smoothed,
+        'peak_small_smoothed': peak_small_smoothed,
+        'peak_all_smoothed': peak_all_smoothed,
+        
+        # Metadata
+        'n_larvae': n_larvae,
+        'large_turn_count': int(large_turn_count),
+        'small_turn_count': int(small_turn_count),
+        'all_turn_count': int(all_turn_count),
+        'n_large_peaks': len(large_peak_orientations),
+        'n_small_peaks': len(small_peak_orientations),
+        'n_all_peaks': len(all_peak_orientations)
+    }
 def analyze_turn_amplitudes_by_orientation(trx_data, larva_id=None, bin_width=10):
     """
     Calculate turn amplitudes as a function of orientation for large turns, small turns, and all turns.
@@ -5791,6 +6881,628 @@ def analyze_cast_orientations_all(experiments_data):
         'n_total_casts': len(all_cast_orientations)
     }
 
+def analyze_cast_orientations_all_new(experiments_data, smooth_window=5, jump_threshold=15):
+    """
+    Analyze cast orientations across all experiments using sophisticated peak detection,
+    separating large casts, small casts, and total casts.
+    
+    Args:
+        experiments_data: Dict containing all experiments data
+        smooth_window: Window size for smoothing (default=5)
+        jump_threshold: Threshold for detecting orientation jumps in degrees/frame (default=15)
+        
+    Returns:
+        dict: Contains orientation data and statistics for large, small, and total casts
+    """
+    from scipy.ndimage import gaussian_filter1d
+    from scipy.signal import find_peaks
+    
+    # Initialize separate storage for large, small, and total casts
+    large_cast_orientations = []
+    small_cast_orientations = []
+    all_cast_orientations = []
+    total_larvae = 0
+    
+    # Handle nested data structure
+    if 'data' in experiments_data:
+        data_to_process = experiments_data['data']
+        total_larvae = experiments_data['metadata']['total_larvae']
+    else:
+        data_to_process = experiments_data
+        total_larvae = len(data_to_process)
+    
+    # Process the data
+    if isinstance(data_to_process, dict):
+        # Single experiment case
+        large_cast_o, small_cast_o, all_cast_o = extract_cast_orientations(data_to_process, smooth_window, jump_threshold)
+        large_cast_orientations.extend(large_cast_o)
+        small_cast_orientations.extend(small_cast_o)
+        all_cast_orientations.extend(all_cast_o)
+    else:
+        # Multiple experiments case
+        for exp_data in data_to_process.values():
+            large_cast_o, small_cast_o, all_cast_o = extract_cast_orientations(exp_data, smooth_window, jump_threshold)
+            large_cast_orientations.extend(large_cast_o)
+            small_cast_orientations.extend(small_cast_o)
+            all_cast_orientations.extend(all_cast_o)
+    
+    # Convert to numpy arrays
+    large_cast_orientations = np.array(large_cast_orientations)
+    small_cast_orientations = np.array(small_cast_orientations)
+    all_cast_orientations = np.array(all_cast_orientations)
+    
+    # Create histograms for each type
+    bins = np.linspace(-180, 180, 37)  # 36 bins
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+    
+    # Calculate histograms
+    hist_large = np.histogram(large_cast_orientations, bins=bins, density=True)[0] if len(large_cast_orientations) > 0 else np.zeros(36)
+    hist_small = np.histogram(small_cast_orientations, bins=bins, density=True)[0] if len(small_cast_orientations) > 0 else np.zeros(36)
+    hist_all = np.histogram(all_cast_orientations, bins=bins, density=True)[0] if len(all_cast_orientations) > 0 else np.zeros(36)
+    
+    # Apply smoothing
+    smoothed_large = gaussian_filter1d(hist_large, sigma=1)
+    smoothed_small = gaussian_filter1d(hist_small, sigma=1)
+    smoothed_all = gaussian_filter1d(hist_all, sigma=1)
+    
+    # Create figure with three subplots in a row
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(12, 4))
+    
+    # Plot 1: Large casts
+    ax1.plot(bin_centers, hist_large, 'k-', alpha=0.3, linewidth=1)
+    ax1.plot(bin_centers, smoothed_large, 'r-', linewidth=2)
+    ax1.set_xlabel('Body orientation (°)')
+    ax1.set_ylabel('Relative probability')
+    ax1.set_xlim(-180, 180)
+    ax1.set_title(f'Large Casts (n={len(large_cast_orientations)})')
+    
+    # Plot 2: Small casts
+    ax2.plot(bin_centers, hist_small, 'k-', alpha=0.3, linewidth=1)
+    ax2.plot(bin_centers, smoothed_small, 'b-', linewidth=2)
+    ax2.set_xlabel('Body orientation (°)')
+    ax2.set_ylabel('Relative probability')
+    ax2.set_xlim(-180, 180)
+    ax2.set_title(f'Small Casts (n={len(small_cast_orientations)})')
+    
+    # Plot 3: All casts combined
+    ax3.plot(bin_centers, hist_all, 'k-', alpha=0.3, linewidth=1)
+    ax3.plot(bin_centers, smoothed_all, 'g-', linewidth=2)
+    ax3.set_xlabel('Body orientation (°)')
+    ax3.set_ylabel('Relative probability')
+    ax3.set_xlim(-180, 180)
+    ax3.set_title(f'All Casts Combined (n={len(all_cast_orientations)})')
+    
+    # Add reference lines for upstream/downstream orientation
+    for ax in [ax1, ax2, ax3]:
+        ax.axvline(x=0, color='gray', linestyle='--', alpha=0.3, label='Downstream')
+        ax.axvline(x=180, color='gray', linestyle='--', alpha=0.3, label='Upstream')
+        ax.axvline(x=-180, color='gray', linestyle='--', alpha=0.3)
+    
+    # Add super title
+    plt.suptitle(f'Cast Orientation Distributions (Total larvae: {total_larvae})', fontsize=14)
+    
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.85)  # Make room for the suptitle
+    plt.show()
+    
+    # Create comparison plot - all distributions on one plot
+    plt.figure(figsize=(6, 4))
+    
+    if len(large_cast_orientations) > 0:
+        plt.plot(bin_centers, smoothed_large, 'r-', linewidth=2, label='Large casts')
+    
+    if len(small_cast_orientations) > 0:
+        plt.plot(bin_centers, smoothed_small, 'b-', linewidth=2, label='Small casts')
+    
+    if len(all_cast_orientations) > 0:
+        plt.plot(bin_centers, smoothed_all, 'g-', linewidth=2, label='All casts')
+    
+    plt.xlabel('Body orientation (°)')
+    plt.ylabel('Relative probability')
+    plt.xlim(-180, 180)
+    plt.title(f'Cast Orientation Comparison (n={total_larvae} larvae)')
+    plt.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=180, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=-180, color='gray', linestyle='--', alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    
+    return {
+        'large_cast_orientations': large_cast_orientations,
+        'small_cast_orientations': small_cast_orientations,
+        'all_cast_orientations': all_cast_orientations,
+        'hist_large': hist_large,
+        'hist_small': hist_small,
+        'hist_all': hist_all,
+        'bin_centers': bin_centers,
+        'smoothed_large': smoothed_large,
+        'smoothed_small': smoothed_small,
+        'smoothed_all': smoothed_all,
+        'n_larvae': total_larvae,
+        'n_large_casts': len(large_cast_orientations),
+        'n_small_casts': len(small_cast_orientations),
+        'n_total_casts': len(all_cast_orientations)
+    }
+
+def extract_cast_orientations(data, smooth_window=5, jump_threshold=15):
+    """
+    Extract cast orientations using sophisticated peak detection techniques.
+    
+    Args:
+        data: Dictionary containing larva tracking data
+        smooth_window: Window size for smoothing (default=5)
+        jump_threshold: Threshold for detecting orientation jumps (default=15)
+        
+    Returns:
+        tuple: (large_cast_orientations, small_cast_orientations, all_cast_orientations)
+    """
+    from scipy.ndimage import gaussian_filter1d
+    from scipy.signal import find_peaks
+    
+    # Initialize orientation storage
+    large_cast_orientations = []
+    small_cast_orientations = []
+    all_cast_orientations = []
+    
+    # Process each larva
+    for larva_id, larva_data in data.items():
+        # Extract nested data if needed
+        if 'data' in larva_data:
+            larva_data = larva_data['data']
+            
+        # Extract required data
+        try:
+            # Extract basic time series data
+            time = np.array(larva_data['t']).flatten()
+            states = np.array(larva_data['global_state_large_state']).flatten()
+            
+            # Check for small_large_state or fall back to large_state
+            has_small_large_state = 'global_state_small_large_state' in larva_data
+            
+            if has_small_large_state:
+                # Extract both small and large cast states
+                small_large_states = np.array(larva_data['global_state_small_large_state']).flatten()
+                large_cast_mask = small_large_states == 2.0  # Large casts = 2.0
+                small_cast_mask = small_large_states == 1.5  # Small casts = 1.5
+            else:
+                # Fall back to just large state if small_large_state isn't available
+                large_cast_mask = states == 2  # Only large casts available
+                small_cast_mask = np.zeros_like(states, dtype=bool)  # No small casts
+            
+            any_cast_mask = large_cast_mask | small_cast_mask
+            
+            # Get orientation angles
+            x_center = np.array(larva_data['x_center']).flatten()
+            y_center = np.array(larva_data['y_center']).flatten()
+            x_spine = np.array(larva_data['x_spine'])
+            y_spine = np.array(larva_data['y_spine'])
+            
+            if x_spine.ndim > 1:
+                x_tail = x_spine[-1].flatten()
+                y_tail = y_spine[-1].flatten()
+            else:
+                x_tail = x_spine
+                y_tail = y_spine
+            
+            # Calculate orientation vectors
+            dx = x_center - x_tail
+            dy = y_center - y_tail
+            orientation_angles = np.degrees(np.arctan2(dy, dx))  # -dx because 0° is negative x-axis
+            
+            # Get upper-lower bend angle
+            angle_upper_lower = np.array(larva_data['angle_upper_lower_smooth_5']).flatten()
+            angle_upper_lower_deg = np.degrees(angle_upper_lower)
+            
+            # Ensure all arrays have the same length
+            min_length = min(len(time), len(orientation_angles), len(angle_upper_lower_deg), len(states))
+            time = time[:min_length]
+            orientation_angles = orientation_angles[:min_length]
+            angle_upper_lower_deg = angle_upper_lower_deg[:min_length]
+            states = states[:min_length]
+            large_cast_mask = large_cast_mask[:min_length]
+            small_cast_mask = small_cast_mask[:min_length]
+            any_cast_mask = any_cast_mask[:min_length]
+            
+            # ==== FILTERING AND PROCESSING ====
+            
+            # 1. Orientation angle jump detection and correction
+            orientation_raw = orientation_angles.copy()
+            
+            # Calculate derivative to detect jumps
+            orientation_diff = np.abs(np.diff(orientation_angles))
+            # Add zero at the beginning to match length
+            orientation_diff = np.insert(orientation_diff, 0, 0)
+            
+            # Find jumps bigger than threshold
+            jumps = orientation_diff > jump_threshold
+            
+            # Create masked array for plotting
+            orientation_masked = np.ma.array(orientation_angles, mask=jumps)
+            
+            # Apply Gaussian smoothing to the filtered data
+            # First interpolate masked values for smoothing
+            orientation_interp = orientation_masked.filled(np.nan)
+            mask = np.isnan(orientation_interp)
+            
+            # Only interpolate if we have valid data
+            if np.sum(~mask) > 1:
+                indices = np.arange(len(orientation_interp))
+                valid_indices = indices[~mask]
+                valid_values = orientation_interp[~mask]
+                orientation_interp[mask] = np.interp(indices[mask], valid_indices, valid_values)
+            
+            # Apply smoothing
+            orientation_smooth = gaussian_filter1d(orientation_interp, smooth_window/3.0)
+            
+            # 2. Intelligent peak detection for bend angle
+            # Calculate slope changes
+            bend_angle_diff = np.diff(angle_upper_lower_deg)
+            # Add zero at the beginning to match length
+            bend_angle_diff = np.insert(bend_angle_diff, 0, 0)
+            
+            # Smooth the bend angle
+            bend_angle_smooth = gaussian_filter1d(angle_upper_lower_deg, smooth_window/3.0)
+            
+            # Find peaks with intelligent filtering
+            pos_peaks, _ = find_peaks(
+                bend_angle_smooth, 
+                height=5,
+                prominence=3,
+                distance=5
+            )
+            
+            neg_peaks, _ = find_peaks(
+                -bend_angle_smooth, 
+                height=5,
+                prominence=3,
+                distance=5
+            )
+            
+            # Combine positive and negative peaks
+            all_peaks = np.union1d(pos_peaks, neg_peaks)
+            
+            # Filter out peaks that start from flat regions
+            slope_threshold = 0.5  # Define what's considered "flat"
+            filtered_peaks = []
+            for peak in all_peaks:
+                if peak > 0 and abs(bend_angle_diff[peak-1]) > slope_threshold:
+                    filtered_peaks.append(peak)
+            
+            # Collect orientations at valid cast peaks
+            for peak in filtered_peaks:
+                if large_cast_mask[peak]:
+                    large_cast_orientations.append(orientation_smooth[peak])
+                    all_cast_orientations.append(orientation_smooth[peak])
+                elif small_cast_mask[peak]:
+                    small_cast_orientations.append(orientation_smooth[peak])
+                    all_cast_orientations.append(orientation_smooth[peak])
+                elif any_cast_mask[peak]:  # Fallback for any cast
+                    all_cast_orientations.append(orientation_smooth[peak])
+            
+        except Exception as e:
+            print(f"Error processing larva {larva_id}: {str(e)}")
+            continue
+    
+    return large_cast_orientations, small_cast_orientations, all_cast_orientations
+
+
+def detect_cast_peaks(trx_data, smooth_window=5, jump_threshold=15, peak_threshold=10.0, acceptance_threshold=30.0):
+    """
+    Detect peaks in cast events for all larvae in the tracking data.
+    
+    Args:
+        trx_data: Dictionary containing tracking data
+        smooth_window: Window size for smoothing the angle data
+        jump_threshold: Threshold for detecting orientation jumps in degrees/frame
+        peak_threshold: Minimum height for a peak to be considered significant
+        acceptance_threshold: Maximum difference (degrees) between peak orientation and final orientation
+                             for a peak to be considered "accepted"
+        
+    Returns:
+        dict: Contains detected peaks with their properties
+    """
+    from scipy.ndimage import gaussian_filter1d
+    from scipy.signal import find_peaks
+    
+    # Storage for detected peaks
+    all_peaks = {
+        'orientations': [],      # Body orientation at peak time
+        'amplitudes': [],        # Peak amplitude (bend angle)
+        'directions': [],        # Direction of cast (positive/negative)
+        'larva_ids': [],         # ID of larva for each peak
+        'cast_types': [],        # Whether it was a large or small cast
+        'is_first_peak': [],     # Flag for first peak in a segment
+        'is_last_peak': [],      # Flag for last peak in a segment
+        'is_accepted': [],       # Flag if orientation changed to match peak
+        'frame_indices': []      # Store frame indices for reference
+    }
+    
+    # Process each larva
+    for larva_id, larva_data in trx_data.items():
+        if 'data' in larva_data:
+            larva_data = larva_data['data']
+            
+        # Skip larvae with insufficient data
+        if not all(key in larva_data for key in ['global_state_large_state', 'angle_upper_lower_smooth_5']):
+            continue
+            
+        # Extract behavior states and angles
+        states = np.array(larva_data['global_state_large_state']).flatten()
+        angles = np.degrees(np.array(larva_data['angle_upper_lower_smooth_5']).flatten())
+        
+        # Get orientation angles
+        x_center = np.array(larva_data['x_center']).flatten()
+        y_center = np.array(larva_data['y_center']).flatten()
+        x_tail = np.array(larva_data['x_spine'])[-1].flatten()
+        y_tail = np.array(larva_data['y_spine'])[-1].flatten()
+        
+        tail_to_center = np.column_stack([x_center - x_tail, y_center - y_tail])
+        orientations = np.degrees(np.arctan2(tail_to_center[:, 1], -tail_to_center[:, 0]))
+        
+        # Ensure all arrays have the same length
+        min_length = min(len(states), len(angles), len(orientations))
+        states = states[:min_length]
+        angles = angles[:min_length]
+        orientations = orientations[:min_length]
+        
+        # Apply smoothing to angle data
+        angles_smooth = gaussian_filter1d(angles, sigma=smooth_window/3.0)
+        
+        # Identify segments with cast behavior (state = 2 for large casts, 1.5 for small casts)
+        large_cast_mask = (states == 2.0)
+        small_cast_mask = (states == 1.5)
+        
+        # Process cast segments to find peaks
+        for cast_type, cast_mask in [('large', large_cast_mask), ('small', small_cast_mask)]:
+            # Find continuous segments of casting behavior
+            cast_segments = []
+            in_cast = False
+            cast_start = 0
+            
+            for i in range(len(cast_mask)):
+                if cast_mask[i] and not in_cast:
+                    # Start of a new cast
+                    in_cast = True
+                    cast_start = i
+                elif not cast_mask[i] and in_cast:
+                    # End of a cast
+                    in_cast = False
+                    if i - cast_start >= 3:  # Require at least 3 frames for a valid cast
+                        cast_segments.append((cast_start, i))
+            
+            # Handle case when still in cast at end of data
+            if in_cast and len(cast_mask) - cast_start >= 3:
+                cast_segments.append((cast_start, len(cast_mask)))
+            
+            # Process each cast segment
+            for start, end in cast_segments:
+                segment_angles = angles_smooth[start:end]
+                segment_orientations = orientations[start:end]
+                
+                # Find peaks in absolute angle values
+                peak_indices, peak_props = find_peaks(
+                    np.abs(segment_angles), 
+                    height=peak_threshold,
+                    prominence=3.0,
+                    distance=3
+                )
+                
+                # Skip if no peaks found
+                if len(peak_indices) == 0:
+                    continue
+                
+                # Get final orientation after the cast (if available)
+                # Check the orientation a few frames after the cast ends
+                post_cast_frames = 5  # Look ahead this many frames
+                final_orientation = None
+                if end + post_cast_frames < len(orientations):
+                    # Use the average orientation from several frames after the cast
+                    final_orientation = np.mean(orientations[end:end+post_cast_frames])
+                elif end < len(orientations):
+                    # If at the edge of data, use what's available
+                    final_orientation = np.mean(orientations[end:])
+                elif end - 1 < len(orientations):
+                    # If at the very edge, use the last frame
+                    final_orientation = orientations[end - 1]
+                
+                # Process detected peaks
+                for i, idx in enumerate(peak_indices):
+                    if start + idx < len(orientations):
+                        global_idx = start + idx  # Global frame index
+                        peak_orientation = segment_orientations[idx]
+                        peak_amplitude = segment_angles[idx]
+                        peak_direction = 1 if peak_amplitude > 0 else -1  # +1 for rightward, -1 for leftward
+                        
+                        # Mark first and last peaks
+                        is_first = (i == 0)
+                        is_last = (i == len(peak_indices) - 1)
+                        
+                        # Determine if the peak is "accepted"
+                        # A peak is accepted if the final body orientation is close to the peak orientation
+                        is_accepted = False
+                        if final_orientation is not None:
+                            # Calculate circular difference between orientations (handles angle wrap-around)
+                            diff = abs((peak_orientation - final_orientation + 180) % 360 - 180)
+                            is_accepted = diff <= acceptance_threshold
+                        
+                        # Store all peak data
+                        all_peaks['orientations'].append(peak_orientation)
+                        all_peaks['amplitudes'].append(peak_amplitude)
+                        all_peaks['directions'].append(peak_direction)
+                        all_peaks['larva_ids'].append(larva_id)
+                        all_peaks['cast_types'].append(cast_type)
+                        all_peaks['is_first_peak'].append(is_first)
+                        all_peaks['is_last_peak'].append(is_last)
+                        all_peaks['is_accepted'].append(is_accepted)
+                        all_peaks['frame_indices'].append(global_idx)
+    
+    # Convert lists to numpy arrays
+    for key in all_peaks:
+        all_peaks[key] = np.array(all_peaks[key])
+    
+    all_peaks['n_peaks'] = len(all_peaks['orientations'])
+    
+    # Print summary statistics
+    n_first = np.sum(all_peaks['is_first_peak'])
+    n_last = np.sum(all_peaks['is_last_peak'])
+    n_accepted = np.sum(all_peaks['is_accepted'])
+    n_total = all_peaks['n_peaks']
+    
+    print(f"Detected {n_total} cast peaks across {len(np.unique(all_peaks['larva_ids']))} larvae")
+    print(f"First peaks: {n_first} ({n_first/n_total*100:.1f}%), Last peaks: {n_last} ({n_last/n_total*100:.1f}%)")
+    print(f"Accepted peaks: {n_accepted} ({n_accepted/n_total*100:.1f}%)")
+    
+    return all_peaks
+
+
+def analyze_cast_peaks_by_orientation(peaks_data, bin_width=10):
+    """
+    Analyze how cast peak characteristics vary with body orientation.
+    
+    Args:
+        peaks_data: Dictionary containing detected cast peaks
+        bin_width: Width of orientation bins in degrees
+        
+    Returns:
+        dict: Contains binned statistics for cast peaks
+    """
+    import numpy as np
+    from scipy.ndimage import gaussian_filter1d
+    import matplotlib.pyplot as plt
+    
+    # Create orientation bins from -180 to 180 degrees
+    bins = np.arange(-180, 181, bin_width)
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+    
+    # Separate large and small cast peaks
+    large_mask = (peaks_data['cast_types'] == 'large')
+    small_mask = (peaks_data['cast_types'] == 'small')
+    
+    # Filter data by cast type
+    large_orientations = peaks_data['orientations'][large_mask]
+    large_amplitudes = peaks_data['amplitudes'][large_mask]
+    large_directions = peaks_data['directions'][large_mask]
+    
+    small_orientations = peaks_data['orientations'][small_mask]
+    small_amplitudes = peaks_data['amplitudes'][small_mask]
+    small_directions = peaks_data['directions'][small_mask]
+    
+    # All casts combined
+    all_orientations = peaks_data['orientations']
+    all_amplitudes = peaks_data['amplitudes']
+    all_directions = peaks_data['directions']
+    
+    # Initialize arrays for binned statistics
+    large_mean_amplitudes = np.zeros(len(bin_centers))
+    large_direction_bias = np.zeros(len(bin_centers))
+    large_count = np.zeros(len(bin_centers))
+    
+    small_mean_amplitudes = np.zeros(len(bin_centers))
+    small_direction_bias = np.zeros(len(bin_centers))
+    small_count = np.zeros(len(bin_centers))
+    
+    all_mean_amplitudes = np.zeros(len(bin_centers))
+    all_direction_bias = np.zeros(len(bin_centers))
+    all_count = np.zeros(len(bin_centers))
+    
+    # Calculate binned statistics
+    for i in range(len(bin_centers)):
+        # Define bin range
+        bin_min = bins[i]
+        bin_max = bins[i+1]
+        
+        # Filter peaks by orientation
+        large_bin_mask = (large_orientations >= bin_min) & (large_orientations < bin_max)
+        small_bin_mask = (small_orientations >= bin_min) & (small_orientations < bin_max)
+        all_bin_mask = (all_orientations >= bin_min) & (all_orientations < bin_max)
+        
+        # Calculate statistics for large casts
+        if np.sum(large_bin_mask) > 0:
+            large_mean_amplitudes[i] = np.mean(np.abs(large_amplitudes[large_bin_mask]))
+            large_direction_bias[i] = np.mean(large_directions[large_bin_mask])
+            large_count[i] = np.sum(large_bin_mask)
+        
+        # Calculate statistics for small casts
+        if np.sum(small_bin_mask) > 0:
+            small_mean_amplitudes[i] = np.mean(np.abs(small_amplitudes[small_bin_mask]))
+            small_direction_bias[i] = np.mean(small_directions[small_bin_mask])
+            small_count[i] = np.sum(small_bin_mask)
+        
+        # Calculate statistics for all casts
+        if np.sum(all_bin_mask) > 0:
+            all_mean_amplitudes[i] = np.mean(np.abs(all_amplitudes[all_bin_mask]))
+            all_direction_bias[i] = np.mean(all_directions[all_bin_mask])
+            all_count[i] = np.sum(all_bin_mask)
+    
+    # Apply smoothing
+    large_amplitude_smooth = gaussian_filter1d(large_mean_amplitudes, sigma=1)
+    large_direction_smooth = gaussian_filter1d(large_direction_bias, sigma=1)
+    
+    small_amplitude_smooth = gaussian_filter1d(small_mean_amplitudes, sigma=1)
+    small_direction_smooth = gaussian_filter1d(small_direction_bias, sigma=1)
+    
+    all_amplitude_smooth = gaussian_filter1d(all_mean_amplitudes, sigma=1)
+    all_direction_smooth = gaussian_filter1d(all_direction_bias, sigma=1)
+    
+    # Create visualization - Amplitude by orientation
+    plt.figure(figsize=(12, 5))
+    
+    plt.subplot(1, 2, 1)
+    plt.plot(bin_centers, large_amplitude_smooth, 'r-', label='Large casts')
+    plt.plot(bin_centers, small_amplitude_smooth, 'b-', label='Small casts')
+    plt.plot(bin_centers, all_amplitude_smooth, 'g-', label='All casts')
+    plt.xlabel('Body Orientation (°)')
+    plt.ylabel('Mean Peak Amplitude (°)')
+    plt.title('Cast Peak Amplitude by Orientation')
+    plt.xlim(-180, 180)
+    plt.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=180, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=-180, color='gray', linestyle='--', alpha=0.3)
+    plt.legend()
+    
+    # Create visualization - Direction bias by orientation
+    plt.subplot(1, 2, 2)
+    plt.plot(bin_centers, large_direction_smooth, 'r-', label='Large casts')
+    plt.plot(bin_centers, small_direction_smooth, 'b-', label='Small casts')
+    plt.plot(bin_centers, all_direction_smooth, 'g-', label='All casts')
+    plt.xlabel('Body Orientation (°)')
+    plt.ylabel('Direction Bias\n(+1: Right, -1: Left)')
+    plt.title('Cast Direction Bias by Orientation')
+    plt.xlim(-180, 180)
+    plt.axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=180, color='gray', linestyle='--', alpha=0.3)
+    plt.axvline(x=-180, color='gray', linestyle='--', alpha=0.3)
+    plt.axhline(y=0, color='gray', linestyle='--', alpha=0.3)
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.show()
+    
+    return {
+        'bin_centers': bin_centers,
+        'large_mean_amplitudes': large_mean_amplitudes,
+        'large_direction_bias': large_direction_bias,
+        'large_count': large_count,
+        'large_amplitude_smooth': large_amplitude_smooth,
+        'large_direction_smooth': large_direction_smooth,
+        'small_mean_amplitudes': small_mean_amplitudes,
+        'small_direction_bias': small_direction_bias,
+        'small_count': small_count,
+        'small_amplitude_smooth': small_amplitude_smooth,
+        'small_direction_smooth': small_direction_smooth,
+        'all_mean_amplitudes': all_mean_amplitudes,
+        'all_direction_bias': all_direction_bias,
+        'all_count': all_count,
+        'all_amplitude_smooth': all_amplitude_smooth,
+        'all_direction_smooth': all_direction_smooth,
+        'n_large_peaks': np.sum(large_mask),
+        'n_small_peaks': np.sum(small_mask),
+        'n_total_peaks': len(all_orientations)
+    }
+
+
+
 def analyze_run_rate_by_orientation(trx_data, larva_id=None, bin_width=10):
     """
     Calculate run rate (probability) as a function of orientation for large runs, small runs, and all runs.
@@ -6005,6 +7717,504 @@ def analyze_run_rate_by_orientation(trx_data, larva_id=None, bin_width=10):
         'all_run_count': int(all_run_count)
     }
 
+
+def plot_combined_run_orientation_analysis(data, bin_width=10, save_path=None):
+    """
+    Plot both run orientation distribution and run probability on the same polar plot.
+    
+    Args:
+        data: The filtered data containing larva tracking information
+        bin_width: Width of the orientation bins in degrees
+        save_path: Path to save the figure (None for no saving)
+    
+    Returns:
+        dict: Results from both analyses
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import src.processor as processor
+    
+    # Run both analyses
+    orientation_results = processor.analyze_run_orientations_all(data)
+    rate_results = processor.analyze_run_rate_by_orientation(data, bin_width=bin_width)
+    
+    # Extract data for plotting
+    orientations = np.array(orientation_results['bin_centers'])
+    orientation_dist = np.array(orientation_results['smoothed_all'])
+    
+    rates_orientations = np.array(rate_results['bin_centers'])
+    run_rates = np.array(rate_results['all_smoothed'])
+    
+    # Convert to radians for polar plot
+    orientations_rad = np.deg2rad(orientations)
+    rates_orientations_rad = np.deg2rad(rates_orientations)
+    
+    # Create figure with polar projection
+    fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={'projection': 'polar'})
+    
+    # Plot orientation distribution (where larvae face when running)
+    line1 = ax.plot(orientations_rad, orientation_dist, 
+             color='blue', linewidth=2, label='Orientation Distribution')
+    ax.fill_between(orientations_rad, 0, orientation_dist, alpha=0.2, color='blue')
+    
+    # Create a second y-axis for run probability
+    ax2 = ax.twinx()
+    
+    # Plot run probability (how likely to run at each orientation)
+    line2 = ax2.plot(rates_orientations_rad, run_rates, 
+             color='red', linewidth=2, linestyle='--', label='Run Probability')
+    
+    # Set up the primary axis
+    ax.set_theta_zero_location('N')  # 0 degrees at the top
+    ax.set_theta_direction(-1)       # clockwise
+    ax.set_rlabel_position(45)       # Move radial labels
+    
+    # Add labels and titles
+    plt.title('Run Behavior Analysis by Orientation', y=1.08, fontsize=14)
+    
+    # Add a custom legend with both lines
+    lines = line1 + line2
+    labels = [l.get_label() for l in lines]
+    ax.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=2)
+    
+    # Add explanatory text
+    plt.figtext(0.5, 0.01, 
+                'Blue: Distribution of orientations during runs (P(orientation | running))\n'
+                'Red dashed: Probability of running at each orientation (P(running | orientation))', 
+                ha='center', fontsize=10)
+    
+    # Set axis limits (normalize for better visualization)
+    ax.set_ylim(0, max(orientation_dist) * 1.1)
+    ax2.set_ylim(0, max(run_rates) * 1.1)
+    
+    # Add grid
+    ax.grid(True, alpha=0.3)
+    
+    # Add orientation markers
+    ax.set_xticks(np.deg2rad([0, 45, 90, 135, 180, 225, 270, 315]))
+    ax.set_xticklabels(['0°\n(Downstream)', '45°', '90°\n(Crosswind (left))', '135°', 
+                      '180°\n(Upstream)', '225°', '270°\n(Crosswind (right))', '315°'])
+    
+    # Add subtle reference ring
+    theta = np.linspace(0, 2*np.pi, 100)
+    ax.plot(theta, np.ones_like(theta) * max(orientation_dist)/2, 
+            linestyle=':', color='gray', alpha=0.5, linewidth=0.5)
+    
+    plt.tight_layout()
+    
+    # Save if requested
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    plt.show()
+    
+    return {
+        'orientation_results': orientation_results,
+        'rate_results': rate_results
+    }
+
+def plot_polar_run_types_comparison(data, bin_width=10, save_path=None):
+    """
+    Plot polar comparisons of all run types (large, small, all) for both
+    orientation distribution and run probability.
+    
+    Args:
+        data: The filtered data containing larva tracking information
+        bin_width: Width of the orientation bins in degrees
+        save_path: Path to save the figure (None for no saving)
+    
+    Returns:
+        dict: Results from both analyses
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy.ndimage import gaussian_filter1d
+    from matplotlib.lines import Line2D
+    
+    # Run both analyses
+    orientation_results = analyze_run_orientations_all(data)
+    rate_results = analyze_run_rate_by_orientation(data, bin_width=bin_width)
+    
+    # Define colors for different run types
+    colors = {
+        'large': 'red',
+        'small': 'blue',
+        'all': 'green'
+    }
+    
+    # Create a figure with two polar subplots side by side
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6),
+                                  subplot_kw={'projection': 'polar'})
+    
+    # Initialize maximum values for scaling
+    max_dist = 0
+    max_rate = 0
+    
+    # Plot each run type on both plots
+    for run_type in ['large', 'small', 'all']:
+        color = colors[run_type]
+        
+        # Extract orientation distribution data
+        orientations = np.array(orientation_results['bin_centers'])
+        orientation_dist = np.array(orientation_results[f'smoothed_{run_type}'])
+        max_dist = max(max_dist, np.max(orientation_dist))
+        
+        # Extract run probability data
+        rates_orientations = np.array(rate_results['bin_centers'])
+        run_rates = np.array(rate_results[f'{run_type}_smoothed'])
+        max_rate = max(max_rate, np.max(run_rates))
+        
+        # Convert to radians for polar plot
+        orientations_rad = np.deg2rad(orientations)
+        rates_orientations_rad = np.deg2rad(rates_orientations)
+        
+        # Plot on first subplot (orientation distribution)
+        ax1.plot(orientations_rad, orientation_dist, color=color, linewidth=2, 
+                label=f'{run_type.capitalize()} runs')
+        
+        # Plot on second subplot (run probability)
+        ax2.plot(rates_orientations_rad, run_rates, color=color, linewidth=2,
+                label=f'{run_type.capitalize()} runs')
+    
+    # After plotting all lines, add filled areas with lower alpha to avoid overlap
+    for run_type in ['large', 'small', 'all']:
+        color = colors[run_type]
+        alpha = 0.15  # Very light fill
+        
+        # Fill for orientation distribution
+        orientations = np.array(orientation_results['bin_centers'])
+        orientation_dist = np.array(orientation_results[f'smoothed_{run_type}'])
+        orientations_rad = np.deg2rad(orientations)
+        ax1.fill_between(orientations_rad, 0, orientation_dist, alpha=alpha, color=color)
+        
+        # Fill for run probability
+        rates_orientations = np.array(rate_results['bin_centers'])
+        run_rates = np.array(rate_results[f'{run_type}_smoothed'])
+        rates_orientations_rad = np.deg2rad(rates_orientations)
+        ax2.fill_between(rates_orientations_rad, 0, run_rates, alpha=alpha, color=color)
+    
+    # Configure both polar axes
+    for i, ax in enumerate([ax1, ax2]):
+        ax.set_theta_zero_location('N')  # 0 degrees at the top
+        ax.set_theta_direction(-1)       # Clockwise direction
+        ax.set_rlabel_position(45)       # Position radius labels
+        
+        # Add orientation labels
+        ax.set_xticks(np.deg2rad([0, 45, 90, 135, 180, 225, 270, 315]))
+        ax.set_xticklabels(['0°\n(Downstream)', '45°', '90°\n(Crosswind (left))', '135°', 
+                      '180°\n(Upstream)', '225°', '270°\n(Crosswind (right))', '315°'])
+        
+        # Add grid
+        ax.grid(True, alpha=0.3)
+        
+        # Add titles
+        if i == 0:
+            ax.set_title('Run Orientation Distribution\n(Where larvae face during runs)', y=1.08)
+        else:
+            ax.set_title('Run Probability by Orientation\n(How likely to run at each angle)', y=1.08)
+    
+    # Add a single legend for both subplots
+    legend_elements = [
+        Line2D([0], [0], color=colors['large'], linewidth=2, label='Large runs'),
+        Line2D([0], [0], color=colors['small'], linewidth=2, label='Small runs'),
+        Line2D([0], [0], color=colors['all'], linewidth=2, label='All runs')
+    ]
+    fig.legend(handles=legend_elements, loc='upper center', 
+              bbox_to_anchor=(0.5, 0.05), ncol=3)
+    
+    # Add overall title
+    plt.suptitle(f'Run Analysis Comparison (n={orientation_results["n_larvae"]} larvae)', 
+               fontsize=14)
+    
+    plt.tight_layout()
+    plt.subplots_adjust(bottom=0.15)  # Make room for the legend
+    
+    # Save if requested
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    plt.show()
+    
+    return {
+        'orientation_results': orientation_results,
+        'rate_results': rate_results
+    }
+
+def plot_polar_run_comparison(data, run_type='all', bin_width=10, save_path=None):
+    """
+    Plot polar representations of run orientation distribution and run probability
+    for a specific run type (large, small, or all).
+    
+    Args:
+        data: The filtered data containing larva tracking information
+        run_type: Type of runs to analyze ('large', 'small', or 'all')
+        bin_width: Width of the orientation bins in degrees
+        save_path: Path to save the figure (None for no saving)
+    
+    Returns:
+        dict: Results from both analyses
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy.ndimage import gaussian_filter1d
+    
+    # Validate run_type
+    if run_type not in ['large', 'small', 'all']:
+        raise ValueError("run_type must be 'large', 'small', or 'all'")
+    
+    # Run both analyses
+    orientation_results = analyze_run_orientations_all(data)
+    rate_results = analyze_run_rate_by_orientation(data, bin_width=bin_width)
+    
+    # Extract data for the specified run type
+    orientations = np.array(orientation_results['bin_centers'])
+    orientation_dist = np.array(orientation_results[f'smoothed_{run_type}'])
+    
+    rates_orientations = np.array(rate_results['bin_centers'])
+    run_rates = np.array(rate_results[f'{run_type}_smoothed'])
+    
+    # Convert to radians for polar plot
+    orientations_rad = np.deg2rad(orientations)
+    rates_orientations_rad = np.deg2rad(rates_orientations)
+    
+    # Define colors based on run type
+    colors = {
+        'large': 'red',
+        'small': 'blue',
+        'all': 'green'
+    }
+    color = colors[run_type]
+    
+    # Create a figure with two polar subplots side by side
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6),
+                                   subplot_kw={'projection': 'polar'})
+    
+    # Plot 1: Run orientation distribution
+    ax1.plot(orientations_rad, orientation_dist, color=color, linewidth=2)
+    ax1.fill_between(orientations_rad, 0, orientation_dist, alpha=0.3, color=color)
+    ax1.set_title(f'{run_type.capitalize()} Run Orientation Distribution\n(Where larvae face during runs)', 
+                 y=1.08)
+    
+    # Plot 2: Run probability by orientation
+    ax2.plot(rates_orientations_rad, run_rates, color=color, linewidth=2)
+    ax2.fill_between(rates_orientations_rad, 0, run_rates, alpha=0.3, color=color)
+    ax2.set_title(f'{run_type.capitalize()} Run Probability by Orientation\n(How likely to run at each angle)', 
+                 y=1.08)
+    
+    # Configure both polar axes
+    for ax in [ax1, ax2]:
+        ax.set_theta_zero_location('N')  # 0 degrees at the top
+        ax.set_theta_direction(-1)       # Clockwise direction
+        ax.set_rlabel_position(45)       # Position radius labels
+        
+        # Add orientation labels
+        ax.set_xticks(np.deg2rad([0, 45, 90, 135, 180, 225, 270, 315]))
+        ax.set_xticklabels(['0°\n(Downstream)', '45°', '90°\n(Crosswind (left))', '135°', 
+                      '180°\n(Upstream)', '225°', '270°\n(Crosswind (right))', '315°'])
+        
+        # Add grid
+        ax.grid(True, alpha=0.3)
+        
+        # Normalize the radial axis for better visualization
+        ax.set_ylim(0, None)  # Auto-scale the upper limit
+        
+        # Add subtle reference rings
+        max_val = ax.get_ylim()[1]
+        theta = np.linspace(0, 2*np.pi, 100)
+        for r in np.linspace(0, max_val, 4)[1:]:
+            ax.plot(theta, np.ones_like(theta) * r, 
+                   linestyle=':', color='gray', alpha=0.3, linewidth=0.5)
+    
+    # Add overall title
+    n_runs = orientation_results[f'n_{run_type}_runs'] if run_type != 'all' else orientation_results['n_total_runs']
+    plt.suptitle(f'{run_type.capitalize()} Run Analysis (n={orientation_results["n_larvae"]} larvae, {n_runs} runs)', 
+               fontsize=14)
+    
+    # Add explanation text at the bottom
+    plt.figtext(0.5, 0.01, 
+               'Left: Distribution of orientations during runs (P(orientation | running))\n'
+               'Right: Probability of running at each orientation (P(running | orientation))', 
+               ha='center', fontsize=10)
+    
+    plt.tight_layout()
+    
+    # Save if requested
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    plt.show()
+    
+    return {
+        'orientation_results': orientation_results,
+        'rate_results': rate_results
+    }
+
+def plot_polar_run_analysis(data, bin_width=10, save_path=None):
+    """
+    Plot polar representations of run orientation distribution and run probability.
+    
+    Args:
+        data: The filtered data containing larva tracking information
+        bin_width: Width of the orientation bins in degrees
+        save_path: Path to save the figure (None for no saving)
+    
+    Returns:
+        dict: Results from both analyses
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy.ndimage import gaussian_filter1d
+    
+    # Run both analyses
+    orientation_results = analyze_run_orientations_all(data)
+    rate_results = analyze_run_rate_by_orientation(data, bin_width=bin_width)
+    
+    # Extract data for plotting
+    orientations = np.array(orientation_results['bin_centers'])
+    orientation_dist = np.array(orientation_results['smoothed_all'])
+    
+    rates_orientations = np.array(rate_results['bin_centers'])
+    run_rates = np.array(rate_results['all_smoothed'])
+    
+    # Convert to radians for polar plot
+    orientations_rad = np.deg2rad(orientations)
+    rates_orientations_rad = np.deg2rad(rates_orientations)
+    
+    # Create a figure with two polar subplots side by side
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6),
+                                   subplot_kw={'projection': 'polar'})
+    
+    # Plot 1: Run orientation distribution
+    ax1.plot(orientations_rad, orientation_dist, color='blue', linewidth=2)
+    ax1.fill_between(orientations_rad, 0, orientation_dist, alpha=0.3, color='blue')
+    ax1.set_title('Run Orientation Distribution\n(Where larvae face when running)', 
+                 y=1.08)
+    
+    # Plot 2: Run probability by orientation
+    ax2.plot(rates_orientations_rad, run_rates, color='red', linewidth=2)
+    ax2.fill_between(rates_orientations_rad, 0, run_rates, alpha=0.3, color='red')
+    ax2.set_title('Run Probability by Orientation\n(How likely to run at each angle)', 
+                 y=1.08)
+    
+    # Configure both polar axes
+    for ax in [ax1, ax2]:
+        ax.set_theta_zero_location('N')  # 0 degrees at the top
+        ax.set_theta_direction(-1)       # Clockwise direction
+        ax.set_rlabel_position(45)       # Position radius labels
+        
+        # Add orientation labels
+        ax.set_xticks(np.deg2rad([0, 45, 90, 135, 180, 225, 270, 315]))
+        ax.set_xticklabels(['0°\n(Downstream)', '45°', '90°\n(Crosswind (left))', '135°', 
+                      '180°\n(Upstream)', '225°', '270°\n(Crosswind (right))', '315°'])
+        
+        # Add grid
+        ax.grid(True, alpha=0.3)
+    
+    # Add overall title
+    plt.suptitle(f'Run Behavior Analysis (n={orientation_results["n_larvae"]} larvae)', 
+               fontsize=14)
+    
+    # Add explanation text at the bottom
+    plt.figtext(0.5, 0.01, 
+               'Left: Distribution of orientations during runs (P(orientation | running))\n'
+               'Right: Probability of running at each orientation (P(running | orientation))', 
+               ha='center', fontsize=10)
+    
+    plt.tight_layout()
+    
+    # Save if requested
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    plt.show()
+    
+    return {
+        'orientation_results': orientation_results,
+        'rate_results': rate_results
+    }
+
+def plot_polar_run_histograms(data, bin_width=10, save_path=None):
+    """
+    Plot polar histograms of run orientation distribution and run probability.
+    
+    Args:
+        data: The filtered data containing larva tracking information
+        bin_width: Width of the orientation bins in degrees
+        save_path: Path to save the figure (None for no saving)
+    
+    Returns:
+        dict: Results from both analyses
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import src.processor as processor
+    # Run both analyses
+    orientation_results = processor.analyze_run_orientations_all(data)
+    rate_results = processor.analyze_run_rate_by_orientation(data, bin_width=bin_width)
+    
+    # Extract data for plotting
+    orientations = np.array(orientation_results['bin_centers'])
+    orientation_dist = np.array(orientation_results['smoothed_all'])
+    
+    rates_orientations = np.array(rate_results['bin_centers'])
+    run_rates = np.array(rate_results['all_smoothed'])
+    
+    # Convert to radians for polar plot
+    orientations_rad = np.deg2rad(orientations)
+    bin_width_rad = np.deg2rad(bin_width)
+    
+    # Create a figure with two polar subplots side by side
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 7),
+                                   subplot_kw={'projection': 'polar'})
+    
+    # Plot 1: Run orientation distribution as polar histogram
+    bars1 = ax1.bar(orientations_rad, orientation_dist, width=bin_width_rad, bottom=0.0, 
+                   color='royalblue', alpha=0.7, edgecolor='blue', linewidth=0.5)
+    ax1.set_title('Run Orientation Distribution\n(Where larvae face during runs)', 
+                 y=1.08)
+    
+    # Plot 2: Run probability by orientation as polar histogram
+    bars2 = ax2.bar(np.deg2rad(rates_orientations), run_rates, width=bin_width_rad, bottom=0.0,
+                   color='firebrick', alpha=0.7, edgecolor='darkred', linewidth=0.5)
+    ax2.set_title('Run Probability by Orientation\n(How likely to run at each angle)', 
+                 y=1.08)
+    
+    # Configure both polar axes
+    for ax in [ax1, ax2]:
+        ax.set_theta_zero_location('N')  # 0 degrees at the top
+        ax.set_theta_direction(-1)       # Clockwise direction
+        ax.set_rlabel_position(45)       # Position radius labels
+        
+        # Add orientation labels
+        ax.set_xticks(np.deg2rad([0, 45, 90, 135, 180, 225, 270, 315]))
+        ax.set_xticklabels(['0°\n(Downstream)', '45°', '90°\n(Crosswind (left))', '135°', 
+                      '180°\n(Upstream)', '225°', '270°\n(Crosswind (right))', '315°'])
+        
+        # Add grid
+        ax.grid(True, alpha=0.3)
+    
+    # Add overall title
+    plt.suptitle(f'Run Behavior Analysis (n={orientation_results["n_larvae"]} larvae)', 
+               fontsize=14)
+    
+    # Add explanation text at the bottom
+    plt.figtext(0.5, 0.01, 
+               'Left: Distribution of orientations during runs (P(orientation | running))\n'
+               'Right: Probability of running at each orientation (P(running | orientation))', 
+               ha='center', fontsize=10)
+    
+    plt.tight_layout()
+    
+    # Save if requested
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    plt.show()
+    
+    return {
+        'orientation_results': orientation_results,
+        'rate_results': rate_results
+    }
 def analyze_cast_head_angles_by_orientation(trx_data, larva_id=None, bin_width=10):
     """
     Calculate head-to-center angles during cast events as a function of orientation.
@@ -8917,7 +11127,7 @@ def compare_cast_directions_peaks(genotype1_data, genotype2_data, labels=None, a
                                  smooth_window=5, jump_threshold=15, basepath=None):
     """
     Compare upstream and downstream cast distributions between two genotypes when larvae are perpendicular to flow.
-    Uses sophisticated peak detection and classification from bend angles to identify cast events and their directions.
+    Compares all peaks, first peaks, and last peaks separately to identify behavioral differences.
     
     Parameters:
     -----------
@@ -8974,26 +11184,26 @@ def compare_cast_directions_peaks(genotype1_data, genotype2_data, labels=None, a
     
     def analyze_peaks_in_genotype(genotype_data):
         """Analyze cast peaks within a genotype using sophisticated filtering techniques"""
-        # Store per-larva counts
-        per_larva_counts = {
-            'small': {'upstream': [], 'downstream': [], 'larva_ids': [], 'total': []},
-            'large': {'upstream': [], 'downstream': [], 'larva_ids': [], 'total': []},
-            'all': {'upstream': [], 'downstream': [], 'larva_ids': [], 'total': []}
-        }
+        # Store per-larva counts for each peak type (all, first, last)
+        peak_types = ['all', 'first', 'last']
         
-        # Store raw counts for analysis
-        total_counts = {
-            'small': {'upstream': 0, 'downstream': 0},
-            'large': {'upstream': 0, 'downstream': 0},
-            'all': {'upstream': 0, 'downstream': 0}
-        }
+        per_larva_counts = {}
+        total_counts = {}
+        larva_probabilities = {}
         
-        # Store per-larva probabilities for box plot
-        larva_probabilities = {
-            'small': {'upstream': [], 'downstream': []},
-            'large': {'upstream': [], 'downstream': []},
-            'all': {'upstream': [], 'downstream': []}
-        }
+        for ptype in peak_types:
+            per_larva_counts[ptype] = {
+                'large': {'upstream': [], 'downstream': [], 'larva_ids': [], 'total': []},
+                'small': {'upstream': [], 'downstream': [], 'larva_ids': [], 'total': []}
+            }
+            total_counts[ptype] = {
+                'large': {'upstream': 0, 'downstream': 0},
+                'small': {'upstream': 0, 'downstream': 0}
+            }
+            larva_probabilities[ptype] = {
+                'large': {'upstream': [], 'downstream': []},
+                'small': {'upstream': [], 'downstream': []}
+            }
         
         # Determine which data structure we're working with
         if 'data' in genotype_data:
@@ -9096,116 +11306,219 @@ def compare_cast_directions_peaks(genotype1_data, genotype2_data, labels=None, a
                 orientation_smooth = gaussian_filter1d(orientation_interp, smooth_window/3.0)
                 
                 # 2. Intelligent peak detection for bend angle
-                # Calculate slope changes
-                bend_angle_diff = np.diff(angle_upper_lower_deg)
-                # Add zero at the beginning to match length
-                bend_angle_diff = np.insert(bend_angle_diff, 0, 0)
-                
                 # Smooth the bend angle
                 bend_angle_smooth = gaussian_filter1d(angle_upper_lower_deg, smooth_window/3.0)
                 
-                # Find peaks with intelligent filtering:
-                # - Ignore peaks that start from flat regions (slope near zero)
-                # - Require minimum height and prominence
-                pos_peaks, _ = find_peaks(
-                    bend_angle_smooth, 
-                    height=5,        
-                    prominence=3,        
-                    distance=5
-                )
-                
-                neg_peaks, _ = find_peaks(
-                    -bend_angle_smooth, 
-                    height=5,        
-                    prominence=3,        
-                    distance=5
-                )
-                
-                # Combine positive and negative peaks
-                all_peaks = np.union1d(pos_peaks, neg_peaks)
-                
-                # Filter out peaks that start from flat regions
-                slope_threshold = 0.5  # Define what's considered "flat"
-                filtered_peaks = []
-                for peak in all_peaks:
-                    if peak > 0 and abs(bend_angle_diff[peak-1]) > slope_threshold:
-                        filtered_peaks.append(peak)
-                
-                # Storage for cast counts
-                larva_cast_counts = {
-                    'large': {'upstream': 0, 'downstream': 0},
-                    'small': {'upstream': 0, 'downstream': 0},
-                    'all': {'upstream': 0, 'downstream': 0}
+                # 3. Find continuous cast segments
+                cast_segments = {
+                    'large': [],
+                    'small': []
                 }
                 
-                # Process each peak to classify as upstream or downstream
-                for peak in filtered_peaks:
-                    # Only consider peaks during cast behaviors that are perpendicular to flow
-                    is_large_cast = large_cast_mask[peak]
-                    is_small_cast = small_cast_mask[peak]
-                    is_any_cast = any_cast_mask[peak]
-                    is_perp = is_perpendicular(orientation_smooth[peak])
-                    
-                    if is_perp:  # Only analyze peaks when orientation is perpendicular
-                        # Get orientation at time of peak (after smoothing)
-                        orientation = orientation_smooth[peak]
-                        bend_angle = bend_angle_smooth[peak]
-                        
-                        # Normalize orientation to -180 to 180 range
-                        while orientation > 180:
-                            orientation -= 360
-                        while orientation <= -180:
-                            orientation += 360
-                        
-                        # Classify as upstream or downstream based on orientation and bend direction
-                        # Classify based on orientation and bend direction
-                        is_upstream = False
-                        if (orientation > 0 and orientation < 180):  # Right side (positive orientation)
-                            if bend_angle < 0:  # Negative bend is upstream
-                                is_upstream = True
-                            else:  # Positive bend is downstream
-                                is_upstream = False
-                        else:  # Left side (negative orientation)
-                            if bend_angle > 0:  # Positive bend is upstream
-                                is_upstream = True
-                            else:  # Negative bend is downstream
-                                is_upstream = False
-                        
-                        # Update cast counts
-                        cast_direction = 'upstream' if is_upstream else 'downstream'
-                        
-                        if is_large_cast:
-                            larva_cast_counts['large'][cast_direction] += 1
-                        if is_small_cast:
-                            larva_cast_counts['small'][cast_direction] += 1
-                        if is_any_cast:
-                            larva_cast_counts['all'][cast_direction] += 1
+                # Find large cast segments
+                in_segment = False
+                start_idx = 0
+                for i, is_cast in enumerate(large_cast_mask):
+                    if is_cast and not in_segment:
+                        # Start of new segment
+                        in_segment = True
+                        start_idx = i
+                    elif not is_cast and in_segment:
+                        # End of segment
+                        in_segment = False
+                        if i - start_idx >= 3:  # Require at least 3 frames
+                            cast_segments['large'].append((start_idx, i))
                 
-                # Only count larvae with at least one cast in perpendicular orientation
-                has_casts = False
-                for cast_type in ['large', 'small', 'all']:
-                    upstream = larva_cast_counts[cast_type]['upstream']
-                    downstream = larva_cast_counts[cast_type]['downstream']
-                    total = upstream + downstream
+                # Handle case when still in segment at end of data
+                if in_segment and len(large_cast_mask) - start_idx >= 3:
+                    cast_segments['large'].append((start_idx, len(large_cast_mask)))
+                
+                # Find small cast segments
+                in_segment = False
+                start_idx = 0
+                for i, is_cast in enumerate(small_cast_mask):
+                    if is_cast and not in_segment:
+                        # Start of new segment
+                        in_segment = True
+                        start_idx = i
+                    elif not is_cast and in_segment:
+                        # End of segment
+                        in_segment = False
+                        if i - start_idx >= 3:  # Require at least 3 frames
+                            cast_segments['small'].append((start_idx, i))
+                
+                # Handle case when still in segment at end of data
+                if in_segment and len(small_cast_mask) - start_idx >= 3:
+                    cast_segments['small'].append((start_idx, len(small_cast_mask)))
+                
+                # 4. Find peaks within each cast segment
+                all_peaks = {
+                    'large': [],
+                    'small': []
+                }
+                
+                first_peaks = {
+                    'large': [],
+                    'small': []
+                }
+                
+                last_peaks = {
+                    'large': [],
+                    'small': []
+                }
+                
+                # Process each cast type
+                for cast_type in ['large', 'small']:
+                    for start, end in cast_segments[cast_type]:
+                        segment_angles = bend_angle_smooth[start:end]
+                        
+                        # Find peaks in absolute bend angles
+                        abs_angles = np.abs(segment_angles)
+                        
+                        # Find positive and negative peaks
+                        pos_peaks, _ = find_peaks(segment_angles, height=5, prominence=3, distance=3)
+                        neg_peaks, _ = find_peaks(-segment_angles, height=5, prominence=3, distance=3)
+                        
+                        # Combine and sort peaks by position
+                        segment_peaks = sorted(list(pos_peaks) + list(neg_peaks))
+                        
+                        if len(segment_peaks) > 0:
+                            # Convert to global indices
+                            segment_peaks = [start + idx for idx in segment_peaks]
+                            
+                            # Store all peaks
+                            all_peaks[cast_type].extend(segment_peaks)
+                            
+                            # Store first and last peak
+                            first_peaks[cast_type].append(segment_peaks[0])
+                            last_peaks[cast_type].append(segment_peaks[-1])
+                
+                # 5. Classify peaks as upstream or downstream
+                # Storage for cast counts by peak type
+                larva_cast_counts = {
+                    'all': {'large': {'upstream': 0, 'downstream': 0}, 'small': {'upstream': 0, 'downstream': 0}},
+                    'first': {'large': {'upstream': 0, 'downstream': 0}, 'small': {'upstream': 0, 'downstream': 0}},
+                    'last': {'large': {'upstream': 0, 'downstream': 0}, 'small': {'upstream': 0, 'downstream': 0}}
+                }
+                
+                # Process all peaks
+                for cast_type in ['large', 'small']:
+                    # Process all peaks
+                    for peak_idx in all_peaks[cast_type]:
+                        if is_perpendicular(orientation_smooth[peak_idx]):
+                            # Get orientation and bend angle at peak
+                            orientation = orientation_smooth[peak_idx]
+                            bend_angle = bend_angle_smooth[peak_idx]
+                            
+                            # Normalize orientation to -180 to 180 range
+                            while orientation > 180:
+                                orientation -= 360
+                            while orientation <= -180:
+                                orientation += 360
+                            
+                            # Classify as upstream or downstream based on orientation and bend direction
+                            is_upstream = False
+                            if (orientation > 0 and orientation < 180):  # Right side (positive orientation)
+                                if bend_angle < 0:  # Negative bend is upstream
+                                    is_upstream = True
+                                else:  # Positive bend is downstream
+                                    is_upstream = False
+                            else:  # Left side (negative orientation)
+                                if bend_angle > 0:  # Positive bend is upstream
+                                    is_upstream = True
+                                else:  # Negative bend is downstream
+                                    is_upstream = False
+                            
+                            # Update cast counts for all peaks
+                            cast_direction = 'upstream' if is_upstream else 'downstream'
+                            larva_cast_counts['all'][cast_type][cast_direction] += 1
                     
-                    if total >= 3:  # Require at least 3 casts for reliable probability
-                        has_casts = True
+                    # Process first peaks
+                    for peak_idx in first_peaks[cast_type]:
+                        if is_perpendicular(orientation_smooth[peak_idx]):
+                            # Get orientation and bend angle at peak
+                            orientation = orientation_smooth[peak_idx]
+                            bend_angle = bend_angle_smooth[peak_idx]
+                            
+                            # Normalize orientation to -180 to 180 range
+                            while orientation > 180:
+                                orientation -= 360
+                            while orientation <= -180:
+                                orientation += 360
+                            
+                            # Classify as upstream or downstream
+                            is_upstream = False
+                            if (orientation > 0 and orientation < 180):  # Right side
+                                if bend_angle < 0:  # Negative bend is upstream
+                                    is_upstream = True
+                                else:  # Positive bend is downstream
+                                    is_upstream = False
+                            else:  # Left side
+                                if bend_angle > 0:  # Positive bend is upstream
+                                    is_upstream = True
+                                else:  # Negative bend is downstream
+                                    is_upstream = False
+                            
+                            # Update cast counts for first peaks
+                            cast_direction = 'upstream' if is_upstream else 'downstream'
+                            larva_cast_counts['first'][cast_type][cast_direction] += 1
+                    
+                    # Process last peaks
+                    for peak_idx in last_peaks[cast_type]:
+                        if is_perpendicular(orientation_smooth[peak_idx]):
+                            # Get orientation and bend angle at peak
+                            orientation = orientation_smooth[peak_idx]
+                            bend_angle = bend_angle_smooth[peak_idx]
+                            
+                            # Normalize orientation to -180 to 180 range
+                            while orientation > 180:
+                                orientation -= 360
+                            while orientation <= -180:
+                                orientation += 360
+                            
+                            # Classify as upstream or downstream
+                            is_upstream = False
+                            if (orientation > 0 and orientation < 180):  # Right side
+                                if bend_angle < 0:  # Negative bend is upstream
+                                    is_upstream = True
+                                else:  # Positive bend is downstream
+                                    is_upstream = False
+                            else:  # Left side
+                                if bend_angle > 0:  # Positive bend is upstream
+                                    is_upstream = True
+                                else:  # Negative bend is downstream
+                                    is_upstream = False
+                            
+                            # Update cast counts for last peaks
+                            cast_direction = 'upstream' if is_upstream else 'downstream'
+                            larva_cast_counts['last'][cast_type][cast_direction] += 1
+                
+                # 6. Store counts for analysis if we have enough data
+                has_casts = False
+                for peak_type in peak_types:
+                    for cast_type in ['large', 'small']:
+                        upstream = larva_cast_counts[peak_type][cast_type]['upstream']
+                        downstream = larva_cast_counts[peak_type][cast_type]['downstream']
+                        total = upstream + downstream
                         
-                        # Add to total counts
-                        total_counts[cast_type]['upstream'] += upstream
-                        total_counts[cast_type]['downstream'] += downstream
-                        
-                        # Add to per-larva counts
-                        per_larva_counts[cast_type]['upstream'].append(upstream)
-                        per_larva_counts[cast_type]['downstream'].append(downstream)
-                        per_larva_counts[cast_type]['total'].append(total)
-                        per_larva_counts[cast_type]['larva_ids'].append(str(larva_id))
-                        
-                        # Calculate and store probability
-                        upstream_prob = upstream / total
-                        downstream_prob = downstream / total
-                        larva_probabilities[cast_type]['upstream'].append(upstream_prob)
-                        larva_probabilities[cast_type]['downstream'].append(downstream_prob)
+                        if total >= 3:  # Require at least 3 casts for reliable probability
+                            has_casts = True
+                            
+                            # Add to total counts
+                            total_counts[peak_type][cast_type]['upstream'] += upstream
+                            total_counts[peak_type][cast_type]['downstream'] += downstream
+                            
+                            # Add to per-larva counts
+                            per_larva_counts[peak_type][cast_type]['upstream'].append(upstream)
+                            per_larva_counts[peak_type][cast_type]['downstream'].append(downstream)
+                            per_larva_counts[peak_type][cast_type]['total'].append(total)
+                            per_larva_counts[peak_type][cast_type]['larva_ids'].append(str(larva_id))
+                            
+                            # Calculate and store probability
+                            upstream_prob = upstream / total
+                            downstream_prob = downstream / total
+                            larva_probabilities[peak_type][cast_type]['upstream'].append(upstream_prob)
+                            larva_probabilities[peak_type][cast_type]['downstream'].append(downstream_prob)
                 
                 if has_casts:
                     larvae_processed += 1
@@ -9213,75 +11526,85 @@ def compare_cast_directions_peaks(genotype1_data, genotype2_data, labels=None, a
             except Exception as e:
                 print(f"Error processing larva {larva_id}: {e}")
         
-        # Calculate overall probabilities for each cast type
+        # Calculate overall probabilities for each cast type and peak type
         probabilities = {}
-        for cast_type in ['small', 'large', 'all']:
-            upstream = total_counts[cast_type]['upstream']
-            downstream = total_counts[cast_type]['downstream']
-            total = upstream + downstream
-            
-            if total > 0:
-                probabilities[cast_type] = {
-                    'upstream': upstream / total,
-                    'downstream': downstream / total
-                }
-            else:
-                probabilities[cast_type] = {
-                    'upstream': 0,
-                    'downstream': 0
-                }
+        for peak_type in peak_types:
+            probabilities[peak_type] = {}
+            for cast_type in ['large', 'small']:
+                upstream = total_counts[peak_type][cast_type]['upstream']
+                downstream = total_counts[peak_type][cast_type]['downstream']
+                total = upstream + downstream
+                
+                if total > 0:
+                    probabilities[peak_type][cast_type] = {
+                        'upstream': upstream / total,
+                        'downstream': downstream / total
+                    }
+                else:
+                    probabilities[peak_type][cast_type] = {
+                        'upstream': 0,
+                        'downstream': 0
+                    }
         
         # Calculate mean probabilities from per-larva data
         mean_probabilities = {}
         sem_probabilities = {}  # Standard error of mean
-        for cast_type in ['small', 'large', 'all']:
-            up_probs = np.array(larva_probabilities[cast_type]['upstream'])
-            down_probs = np.array(larva_probabilities[cast_type]['downstream'])
-            
-            if len(up_probs) > 0:
-                mean_probabilities[cast_type] = {
-                    'upstream': np.mean(up_probs),
-                    'downstream': np.mean(down_probs)
-                }
-                sem_probabilities[cast_type] = {
-                    'upstream': stats.sem(up_probs) if len(up_probs) > 1 else 0,
-                    'downstream': stats.sem(down_probs) if len(down_probs) > 1 else 0
-                }
-            else:
-                mean_probabilities[cast_type] = {'upstream': 0, 'downstream': 0}
-                sem_probabilities[cast_type] = {'upstream': 0, 'downstream': 0}
         
-        # Statistical tests for each cast type
-        stats_results = {}
-        for cast_type in ['small', 'large', 'all']:
-            upstream_probs = np.array(larva_probabilities[cast_type]['upstream'])
-            downstream_probs = np.array(larva_probabilities[cast_type]['downstream'])
+        for peak_type in peak_types:
+            mean_probabilities[peak_type] = {}
+            sem_probabilities[peak_type] = {}
             
-            if len(upstream_probs) > 0:
-                # One-sample t-test against chance level (0.5)
-                tstat, pval = stats.ttest_1samp(upstream_probs, 0.5)
+            for cast_type in ['large', 'small']:
+                up_probs = np.array(larva_probabilities[peak_type][cast_type]['upstream'])
+                down_probs = np.array(larva_probabilities[peak_type][cast_type]['downstream'])
                 
-                # Add chi-square test on raw counts
-                observed = np.array([total_counts[cast_type]['upstream'], 
-                                    total_counts[cast_type]['downstream']])
-                expected = np.sum(observed) / 2  # Expected equal distribution
-                chi2, p_chi2 = stats.chisquare(observed)
+                if len(up_probs) > 0:
+                    mean_probabilities[peak_type][cast_type] = {
+                        'upstream': np.mean(up_probs),
+                        'downstream': np.mean(down_probs)
+                    }
+                    sem_probabilities[peak_type][cast_type] = {
+                        'upstream': stats.sem(up_probs) if len(up_probs) > 1 else 0,
+                        'downstream': stats.sem(down_probs) if len(down_probs) > 1 else 0
+                    }
+                else:
+                    mean_probabilities[peak_type][cast_type] = {'upstream': 0, 'downstream': 0}
+                    sem_probabilities[peak_type][cast_type] = {'upstream': 0, 'downstream': 0}
+        
+        # Statistical tests for each cast type and peak type
+        stats_results = {}
+        for peak_type in peak_types:
+            stats_results[peak_type] = {}
+            
+            for cast_type in ['large', 'small']:
+                upstream_probs = np.array(larva_probabilities[peak_type][cast_type]['upstream'])
+                downstream_probs = np.array(larva_probabilities[peak_type][cast_type]['downstream'])
                 
-                stats_results[cast_type] = {
-                    'ttest': {'tstat': tstat, 'pval': pval},
-                    'chisquare': {'chi2': chi2, 'pval': p_chi2},
-                    'n_larvae': len(upstream_probs),
-                    'n_upstream': total_counts[cast_type]['upstream'],
-                    'n_downstream': total_counts[cast_type]['downstream']
-                }
-            else:
-                stats_results[cast_type] = {
-                    'ttest': {'tstat': float('nan'), 'pval': float('nan')},
-                    'chisquare': {'chi2': float('nan'), 'pval': float('nan')},
-                    'n_larvae': 0,
-                    'n_upstream': 0,
-                    'n_downstream': 0
-                }
+                if len(upstream_probs) > 0:
+                    # One-sample t-test against chance level (0.5)
+                    tstat, pval = stats.ttest_1samp(upstream_probs, 0.5)
+                    
+                    # Add chi-square test on raw counts
+                    observed = np.array([total_counts[peak_type][cast_type]['upstream'], 
+                                        total_counts[peak_type][cast_type]['downstream']])
+                    expected = np.sum(observed) / 2  # Expected equal distribution
+                    chi2, p_chi2 = stats.chisquare(observed)
+                    
+                    stats_results[peak_type][cast_type] = {
+                        'ttest': {'tstat': tstat, 'pval': pval},
+                        'chisquare': {'chi2': chi2, 'pval': p_chi2},
+                        'n_larvae': len(upstream_probs),
+                        'n_upstream': total_counts[peak_type][cast_type]['upstream'],
+                        'n_downstream': total_counts[peak_type][cast_type]['downstream']
+                    }
+                else:
+                    stats_results[peak_type][cast_type] = {
+                        'ttest': {'tstat': float('nan'), 'pval': float('nan')},
+                        'chisquare': {'chi2': float('nan'), 'pval': float('nan')},
+                        'n_larvae': 0,
+                        'n_upstream': 0,
+                        'n_downstream': 0
+                    }
         
         return {
             'total_counts': total_counts,
@@ -9312,7 +11635,8 @@ def compare_cast_directions_peaks(genotype1_data, genotype2_data, labels=None, a
     }
     
     # Cast types to analyze
-    cast_types = ['all', 'large', 'small']
+    cast_types = ['large', 'small']
+    peak_types = ['all', 'first', 'last']
     
     # Colors for each genotype
     genotype_colors = {
@@ -9326,25 +11650,17 @@ def compare_cast_directions_peaks(genotype1_data, genotype2_data, labels=None, a
         }
     }
     
-    # Count valid cast types (those with data in both genotypes)
-    valid_cast_types = []
-    for cast_type in cast_types:
-        if (len(genotype1_results['larva_probabilities'][cast_type]['upstream']) > 0 and
-            len(genotype2_results['larva_probabilities'][cast_type]['upstream']) > 0):
-            valid_cast_types.append(cast_type)
+    # Count valid cast types (those with data in both genotypes) for each peak type
+    valid_data = {}
+    for peak_type in peak_types:
+        valid_data[peak_type] = []
+        for cast_type in cast_types:
+            if (len(genotype1_results['larva_probabilities'][peak_type][cast_type]['upstream']) > 0 and
+                len(genotype2_results['larva_probabilities'][peak_type][cast_type]['upstream']) > 0):
+                valid_data[peak_type].append(cast_type)
     
-    n_cast_types = len(valid_cast_types)
-    
-    if n_cast_types == 0:
-        print("No cast data found in both genotypes. Skipping plots.")
-        return comparison_results
-    
-    # Create figure for comparison
-    fig, axes = plt.subplots(1, n_cast_types, figsize=(4.5 * n_cast_types, 6))
-    
-    # Handle the case of a single subplot
-    if n_cast_types == 1:
-        axes = [axes]
+    # Create figure for each peak type
+    print(f"Creating comparison plots...")
     
     # Variable to store statistical results for text file
     stat_results_txt = []
@@ -9354,257 +11670,205 @@ def compare_cast_directions_peaks(genotype1_data, genotype2_data, labels=None, a
     stat_results_txt.append(f"Using improved peak detection with jump_threshold={jump_threshold} and smooth_window={smooth_window}")
     stat_results_txt.append("\n")
     
-    # Process each cast type
-    for ax_idx, cast_type in enumerate(valid_cast_types):
-        # Get data for current cast type
-        g1_upstream = genotype1_results['larva_probabilities'][cast_type]['upstream']
-        g1_downstream = genotype1_results['larva_probabilities'][cast_type]['downstream']
-        g2_upstream = genotype2_results['larva_probabilities'][cast_type]['upstream']
-        g2_downstream = genotype2_results['larva_probabilities'][cast_type]['downstream']
+    # Create plots for each peak type
+    for peak_type in peak_types:
+        valid_cast_types = valid_data[peak_type]
+        n_cast_types = len(valid_cast_types)
         
-        # Statistical tests for difference between genotypes
-        # Two-sample t-test for upstream probabilities
-        tstat, pval = stats.ttest_ind(g1_upstream, g2_upstream, equal_var=False)
-        comparison_results['statistical_tests'][f'{cast_type}_upstream'] = {
-            'tstat': tstat,
-            'pval': pval,
-            'n1': len(g1_upstream),
-            'n2': len(g2_upstream)
+        if n_cast_types == 0:
+            print(f"No {peak_type} peak data found in both genotypes. Skipping plot.")
+            continue
+        
+        # Create figure
+        fig, axes = plt.subplots(1, n_cast_types, figsize=(4.5 * n_cast_types, 6))
+        
+        # Handle the case of a single subplot
+        if n_cast_types == 1:
+            axes = [axes]
+        
+        # Process each cast type
+        for ax_idx, cast_type in enumerate(valid_cast_types):
+            # Get data for current cast type
+            g1_upstream = genotype1_results['larva_probabilities'][peak_type][cast_type]['upstream']
+            g1_downstream = genotype1_results['larva_probabilities'][peak_type][cast_type]['downstream']
+            g2_upstream = genotype2_results['larva_probabilities'][peak_type][cast_type]['upstream']
+            g2_downstream = genotype2_results['larva_probabilities'][peak_type][cast_type]['downstream']
+            
+            # Statistical tests for difference between genotypes
+            # Two-sample t-test for upstream probabilities
+            tstat, pval = stats.ttest_ind(g1_upstream, g2_upstream, equal_var=False)
+            comparison_results['statistical_tests'][f'{peak_type}_{cast_type}_upstream'] = {
+                'tstat': tstat,
+                'pval': pval,
+                'n1': len(g1_upstream),
+                'n2': len(g2_upstream)
+            }
+            
+            # Add to text results
+            stat_results_txt.append(f"{peak_type.capitalize()} peaks - {cast_type.capitalize()} casts - Upstream probability comparison:")
+            stat_results_txt.append(f"  {labels[0]}: {np.mean(g1_upstream):.4f} ± {stats.sem(g1_upstream):.4f} (n={len(g1_upstream)})")
+            stat_results_txt.append(f"  {labels[1]}: {np.mean(g2_upstream):.4f} ± {stats.sem(g2_upstream):.4f} (n={len(g2_upstream)})")
+            stat_results_txt.append(f"  Two-sample t-test: t={tstat:.4f}, p={pval:.4f}")
+            
+            # Add raw count statistics for this cast type
+            g1_up_count = genotype1_results['total_counts'][peak_type][cast_type]['upstream']
+            g1_down_count = genotype1_results['total_counts'][peak_type][cast_type]['downstream']
+            g2_up_count = genotype2_results['total_counts'][peak_type][cast_type]['upstream']
+            g2_down_count = genotype2_results['total_counts'][peak_type][cast_type]['downstream']
+            
+            stat_results_txt.append(f"  Raw counts:")
+            stat_results_txt.append(f"    {labels[0]}: {g1_up_count} upstream, {g1_down_count} downstream")
+            stat_results_txt.append(f"    {labels[1]}: {g2_up_count} upstream, {g2_down_count} downstream")
+            
+            # One-sample t-test against chance (0.5) for each genotype
+            for label, data in [(labels[0], g1_upstream), (labels[1], g2_upstream)]:
+                tstat, pval = stats.ttest_1samp(data, 0.5)
+                stat_results_txt.append(f"  {label} vs chance (0.5): t={tstat:.4f}, p={pval:.4f}")
+            
+            stat_results_txt.append("")
+            
+            # Create the plot for this cast type
+            ax = axes[ax_idx]
+            
+            # Data for box plot
+            data = [g1_upstream, g1_downstream, g2_upstream, g2_downstream]
+            positions = [1, 2, 3.5, 4.5]
+            labels_box = [f'{labels[0]}\nUpstream', f'{labels[0]}\nDownstream', 
+                         f'{labels[1]}\nUpstream', f'{labels[1]}\nDownstream']
+            
+            # Create box plot
+            bp = ax.boxplot(data, positions=positions, notch=True, patch_artist=True, 
+                           widths=0.6, showfliers=False)
+            
+            # Color boxes by genotype and direction
+            colors = [genotype_colors[labels[0]]['upstream'], 
+                     genotype_colors[labels[0]]['downstream'],
+                     genotype_colors[labels[1]]['upstream'], 
+                     genotype_colors[labels[1]]['downstream']]
+            
+            for i, box in enumerate(bp['boxes']):
+                box.set(facecolor=colors[i], alpha=0.6)
+                bp['medians'][i].set(color='black', linewidth=1.5)
+            
+            # Add individual data points with jitter
+            for i, (pos, d) in enumerate(zip(positions, data)):
+                jitter = 0.1 * np.random.randn(len(d))
+                ax.scatter(pos + jitter, d, s=25, alpha=0.6, color=colors[i], 
+                          edgecolor='k', linewidth=0.5)
+            
+            # Add annotations: mean ± SEM
+            for i, (pos, d) in enumerate(zip(positions, data)):
+                if len(d) > 0:
+                    mean = np.mean(d)
+                    sem = stats.sem(d) if len(d) > 1 else 0
+                    ax.text(pos, 1.05, f"{mean:.2f}±{sem:.2f}", ha='center', va='bottom',
+                           fontsize=8, bbox=dict(facecolor='white', alpha=0.8, pad=0.1))
+            
+            # Add raw count annotations for each population
+            ax.text(1, -0.05, f"n={g1_up_count}", ha='center', va='top', fontsize=8)
+            ax.text(2, -0.05, f"n={g1_down_count}", ha='center', va='top', fontsize=8)
+            ax.text(3.5, -0.05, f"n={g2_up_count}", ha='center', va='top', fontsize=8)
+            ax.text(4.5, -0.05, f"n={g2_down_count}", ha='center', va='top', fontsize=8)
+            
+            # Add p-value annotation between genotypes
+            # Comparison between genotypes (upstream probabilities)
+            pval = comparison_results['statistical_tests'][f'{peak_type}_{cast_type}_upstream']['pval']
+            if pval < 0.001:
+                ptext = "p<0.001 ***"
+            elif pval < 0.01:
+                ptext = "p<0.01 **"
+            elif pval < 0.05:
+                ptext = f"p={pval:.3f} *"
+            else:
+                ptext = f"p={pval:.3f}"
+                
+            # Add horizontal line and p-value between genotype upstream probabilities
+            ax.plot([1, 3.5], [1.15, 1.15], 'k-', lw=1)
+            ax.text(2.25, 1.17, ptext, ha='center', va='bottom', fontsize=10)
+            
+            # Add significance markers for comparison to chance (0.5)
+            # For first genotype
+            pval_g1 = genotype1_results['stats_results'][peak_type][cast_type]['ttest']['pval']
+            if pval_g1 < 0.05:
+                stars_g1 = "*" * sum([pval_g1 < p for p in [0.05, 0.01, 0.001]])
+                ax.text(1, 0.45, stars_g1, ha='center', va='top', fontsize=14)
+                
+            # For second genotype
+            pval_g2 = genotype2_results['stats_results'][peak_type][cast_type]['ttest']['pval']
+            if pval_g2 < 0.05:
+                stars_g2 = "*" * sum([pval_g2 < p for p in [0.05, 0.01, 0.001]])
+                ax.text(3.5, 0.45, stars_g2, ha='center', va='top', fontsize=14)
+            
+            # Add a dashed line at 0.5 (chance level)
+            ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.7)
+            
+            # Add significance markers for within-genotype comparison (upstream vs downstream)
+            # For first genotype (compare positions 1 and 2)
+            tstat_within_g1, pval_within_g1 = stats.ttest_rel(g1_upstream, g1_downstream)
+            if pval_within_g1 < 0.001:
+                ptext_g1 = "p<0.001 ***"
+            elif pval_within_g1 < 0.01:
+                ptext_g1 = "p<0.01 **"
+            elif pval_within_g1 < 0.05:
+                ptext_g1 = f"p={pval_within_g1:.3f} *"
+            else:
+                ptext_g1 = f"p={pval_within_g1:.3f}"
+                
+            # Add horizontal line and p-value between upstream and downstream for first genotype
+            line_height_g1 = 1.08
+            ax.plot([1, 2], [line_height_g1, line_height_g1], 'k-', lw=1)
+            ax.text(1.5, line_height_g1 + 0.02, ptext_g1, ha='center', va='bottom', fontsize=9)
+
+            # For second genotype (compare positions 3.5 and 4.5)
+            tstat_within_g2, pval_within_g2 = stats.ttest_rel(g2_upstream, g2_downstream)
+            if pval_within_g2 < 0.001:
+                ptext_g2 = "p<0.001 ***"
+            elif pval_within_g2 < 0.01:
+                ptext_g2 = "p<0.01 **"
+            elif pval_within_g2 < 0.05:
+                ptext_g2 = f"p={pval_within_g2:.3f} *"
+            else:
+                ptext_g2 = f"p={pval_within_g2:.3f}"
+                
+            # Add horizontal line and p-value between upstream and downstream for second genotype
+            line_height_g2 = 1.08
+            ax.plot([3.5, 4.5], [line_height_g2, line_height_g2], 'k-', lw=1)
+            ax.text(4.0, line_height_g2 + 0.02, ptext_g2, ha='center', va='bottom', fontsize=9)
+
+            # Update stat_results_txt with within-genotype comparisons
+            stat_results_txt.append(f"  Within-genotype comparisons (upstream vs downstream):")
+            stat_results_txt.append(f"    {labels[0]}: t={tstat_within_g1:.4f}, p={pval_within_g1:.4f} {'(significant)' if pval_within_g1 < 0.05 else '(not significant)'}")
+            stat_results_txt.append(f"    {labels[1]}: t={tstat_within_g2:.4f}, p={pval_within_g2:.4f} {'(significant)' if pval_within_g2 < 0.05 else '(not significant)'}")
+            
+            # Configure the plot
+            ax.set_ylim(0, 1.25)  # Higher upper limit to accommodate annotations
+            ax.set_ylabel('Probability of Cast Direction')
+            ax.set_xticks(positions)
+            ax.set_xticklabels(labels_box, rotation=45, ha='right')
+            ax.set_title(f'{cast_type.capitalize()} Casts')
+        
+        # Add overall title for this peak type
+        peak_title = {
+            'all': 'All Peaks in Cast', 
+            'first': 'First Peak in Cast', 
+            'last': 'Last Peak in Cast'
         }
+        fig.suptitle(f'Comparison of Cast Directions: {peak_title[peak_type]} (±{angle_width}°)', fontsize=14)
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.85, bottom=0.20)  # More space at bottom for labels
         
-        # Add to text results
-        stat_results_txt.append(f"{cast_type.capitalize()} casts - Upstream probability comparison:")
-        stat_results_txt.append(f"  {labels[0]}: {np.mean(g1_upstream):.4f} ± {stats.sem(g1_upstream):.4f} (n={len(g1_upstream)})")
-        stat_results_txt.append(f"  {labels[1]}: {np.mean(g2_upstream):.4f} ± {stats.sem(g2_upstream):.4f} (n={len(g2_upstream)})")
-        stat_results_txt.append(f"  Two-sample t-test: t={tstat:.4f}, p={pval:.4f}")
-        
-        # Add raw count statistics for this cast type
-        g1_up_count = genotype1_results['total_counts'][cast_type]['upstream']
-        g1_down_count = genotype1_results['total_counts'][cast_type]['downstream']
-        g2_up_count = genotype2_results['total_counts'][cast_type]['upstream']
-        g2_down_count = genotype2_results['total_counts'][cast_type]['downstream']
-        
-        stat_results_txt.append(f"  Raw counts:")
-        stat_results_txt.append(f"    {labels[0]}: {g1_up_count} upstream, {g1_down_count} downstream")
-        stat_results_txt.append(f"    {labels[1]}: {g2_up_count} upstream, {g2_down_count} downstream")
-        
-        # One-sample t-test against chance (0.5) for each genotype
-        for label, data in [(labels[0], g1_upstream), (labels[1], g2_upstream)]:
-            tstat, pval = stats.ttest_1samp(data, 0.5)
-            stat_results_txt.append(f"  {label} vs chance (0.5): t={tstat:.4f}, p={pval:.4f}")
-        
-        stat_results_txt.append("")
-        
-        # Create the plot for this cast type
-        ax = axes[ax_idx]
-        
-        # Data for box plot
-        data = [g1_upstream, g1_downstream, g2_upstream, g2_downstream]
-        positions = [1, 2, 3.5, 4.5]
-        labels_box = [f'{labels[0]}\nUpstream', f'{labels[0]}\nDownstream', 
-                      f'{labels[1]}\nUpstream', f'{labels[1]}\nDownstream']
-        
-        # Create box plot
-        bp = ax.boxplot(data, positions=positions, notch=True, patch_artist=True, 
-                       widths=0.6, showfliers=False)
-        
-        # Color boxes by genotype and direction
-        colors = [genotype_colors[labels[0]]['upstream'], 
-                  genotype_colors[labels[0]]['downstream'],
-                  genotype_colors[labels[1]]['upstream'], 
-                  genotype_colors[labels[1]]['downstream']]
-        
-        for i, box in enumerate(bp['boxes']):
-            box.set(facecolor=colors[i], alpha=0.6)
-            bp['medians'][i].set(color='black', linewidth=1.5)
-        
-        # Add individual data points with jitter
-        for i, (pos, d) in enumerate(zip(positions, data)):
-            jitter = 0.1 * np.random.randn(len(d))
-            ax.scatter(pos + jitter, d, s=25, alpha=0.6, color=colors[i], 
-                      edgecolor='k', linewidth=0.5)
-        
-        # Add annotations: mean ± SEM
-        for i, (pos, d) in enumerate(zip(positions, data)):
-            if len(d) > 0:
-                mean = np.mean(d)
-                sem = stats.sem(d) if len(d) > 1 else 0
-                ax.text(pos, 1.05, f"{mean:.2f}±{sem:.2f}", ha='center', va='bottom',
-                       fontsize=8, bbox=dict(facecolor='white', alpha=0.8, pad=0.1))
-        
-        # Add raw count annotations for each population
-        ax.text(1, -0.05, f"n={g1_up_count}", ha='center', va='top', fontsize=8)
-        ax.text(2, -0.05, f"n={g1_down_count}", ha='center', va='top', fontsize=8)
-        ax.text(3.5, -0.05, f"n={g2_up_count}", ha='center', va='top', fontsize=8)
-        ax.text(4.5, -0.05, f"n={g2_down_count}", ha='center', va='top', fontsize=8)
-        
-        # Add p-value annotation between genotypes
-        # Comparison between genotypes (upstream probabilities)
-        pval = comparison_results['statistical_tests'][f'{cast_type}_upstream']['pval']
-        if pval < 0.001:
-            ptext = "p<0.001 ***"
-        elif pval < 0.01:
-            ptext = "p<0.01 **"
-        elif pval < 0.05:
-            ptext = f"p={pval:.3f} *"
-        else:
-            ptext = f"p={pval:.3f}"
+        # Save figure if basepath is provided
+        if basepath is not None:
+            figname = f"{basepath}/cast_direction_{peak_type}_peaks_{label1_safe}_vs_{label2_safe}_{timestamp}.png"
+            plt.savefig(figname, dpi=300, bbox_inches='tight')
+            print(f"Saved figure to: {figname}")
             
-        # Add horizontal line and p-value between genotype upstream probabilities
-        ax.plot([1, 3.5], [1.15, 1.15], 'k-', lw=1)
-        ax.text(2.25, 1.17, ptext, ha='center', va='bottom', fontsize=10)
+            # Also save as SVG for publication-quality figure
+            svgname = f"{basepath}/cast_direction_{peak_type}_peaks_{label1_safe}_vs_{label2_safe}_{timestamp}.svg"
+            plt.savefig(svgname, format='svg', bbox_inches='tight')
+            print(f"Saved SVG to: {svgname}")
         
-        # Add significance markers for comparison to chance (0.5)
-        # For first genotype
-        pval_g1 = genotype1_results['stats_results'][cast_type]['ttest']['pval']
-        if pval_g1 < 0.05:
-            stars_g1 = "*" * sum([pval_g1 < p for p in [0.05, 0.01, 0.001]])
-            ax.text(1, 0.45, stars_g1, ha='center', va='top', fontsize=14)
-            
-        # For second genotype
-        pval_g2 = genotype2_results['stats_results'][cast_type]['ttest']['pval']
-        if pval_g2 < 0.05:
-            stars_g2 = "*" * sum([pval_g2 < p for p in [0.05, 0.01, 0.001]])
-            ax.text(3.5, 0.45, stars_g2, ha='center', va='top', fontsize=14)
-        
-        # Add a dashed line at 0.5 (chance level)
-        ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.7)
-        # Add significance markers for within-genotype comparison (upstream vs downstream)
-        # For first genotype (compare positions 1 and 2)
-        tstat_within_g1, pval_within_g1 = stats.ttest_rel(g1_upstream, g1_downstream)
-        if pval_within_g1 < 0.001:
-            ptext_g1 = "p<0.001 ***"
-        elif pval_within_g1 < 0.01:
-            ptext_g1 = "p<0.01 **"
-        elif pval_within_g1 < 0.05:
-            ptext_g1 = f"p={pval_within_g1:.3f} *"
-        else:
-            ptext_g1 = f"p={pval_within_g1:.3f}"
-            
-        # Add horizontal line and p-value between upstream and downstream for first genotype
-        line_height_g1 = 1.08
-        ax.plot([1, 2], [line_height_g1, line_height_g1], 'k-', lw=1)
-        ax.text(1.5, line_height_g1 + 0.02, ptext_g1, ha='center', va='bottom', fontsize=9)
-
-        # For second genotype (compare positions 3.5 and 4.5)
-        tstat_within_g2, pval_within_g2 = stats.ttest_rel(g2_upstream, g2_downstream)
-        if pval_within_g2 < 0.001:
-            ptext_g2 = "p<0.001 ***"
-        elif pval_within_g2 < 0.01:
-            ptext_g2 = "p<0.01 **"
-        elif pval_within_g2 < 0.05:
-            ptext_g2 = f"p={pval_within_g2:.3f} *"
-        else:
-            ptext_g2 = f"p={pval_within_g2:.3f}"
-            
-        # Add horizontal line and p-value between upstream and downstream for second genotype
-        line_height_g2 = 1.08
-        ax.plot([3.5, 4.5], [line_height_g2, line_height_g2], 'k-', lw=1)
-        ax.text(4.0, line_height_g2 + 0.02, ptext_g2, ha='center', va='bottom', fontsize=9)
-
-        # Update stat_results_txt with within-genotype comparisons
-        stat_results_txt.append(f"  Within-genotype comparisons (upstream vs downstream):")
-        stat_results_txt.append(f"    {labels[0]}: t={tstat_within_g1:.4f}, p={pval_within_g1:.4f} {'(significant)' if pval_within_g1 < 0.05 else '(not significant)'}")
-        stat_results_txt.append(f"    {labels[1]}: t={tstat_within_g2:.4f}, p={pval_within_g2:.4f} {'(significant)' if pval_within_g2 < 0.05 else '(not significant)'}")
-        
-        # Configure the plot
-        ax.set_ylim(0, 1.25)  # Higher upper limit to accommodate annotations
-        ax.set_ylabel('Probability of Cast Direction')
-        ax.set_xticks(positions)
-        ax.set_xticklabels(labels_box, rotation=45, ha='right')
-        ax.set_title(f'{cast_type.capitalize()} Casts')
-    
-    # Add overall title
-    fig.suptitle(f'Comparison of Cast Directions When Perpendicular to Flow (±{angle_width}°)', fontsize=14)
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.85, bottom=0.20)  # More space at bottom for labels
-    
-    # Save figure if basepath is provided
-    if basepath is not None:
-        figname = f"{basepath}/cast_direction_comparison_{label1_safe}_vs_{label2_safe}_{timestamp}.png"
-        plt.savefig(figname, dpi=300, bbox_inches='tight')
-        print(f"Saved figure to: {figname}")
-        
-        # Also save as SVG for publication-quality figure
-        svgname = f"{basepath}/cast_direction_comparison_{label1_safe}_vs_{label2_safe}_{timestamp}.svg"
-        plt.savefig(svgname, format='svg', bbox_inches='tight')
-        print(f"Saved SVG to: {svgname}")
-    
-    plt.show()
-    
-    # Generate per-larva stacked bar plot for each genotype
-    for genotype_name, results in [(labels[0], genotype1_results), (labels[1], genotype2_results)]:
-        # Only create plots for cast types with data
-        for cast_type in cast_types:
-            n_larvae_with_data = len(results['per_larva_counts'][cast_type]['larva_ids'])
-            
-            if n_larvae_with_data > 0:
-                # Calculate downstream probability for each larva and sort
-                larva_data = []
-                for j in range(n_larvae_with_data):
-                    up = results['per_larva_counts'][cast_type]['upstream'][j]
-                    down = results['per_larva_counts'][cast_type]['downstream'][j]
-                    total = results['per_larva_counts'][cast_type]['total'][j]
-                    down_prob = down / total
-                    
-                    larva_data.append({
-                        'id': results['per_larva_counts'][cast_type]['larva_ids'][j],
-                        'upstream': up,
-                        'downstream': down,
-                        'total': total,
-                        'downstream_prob': down_prob
-                    })
-                
-                # Sort by downstream probability (ascending)
-                sorted_larvae = sorted(larva_data, key=lambda x: x['downstream_prob'])
-                
-                # Create per-larva bar chart
-                plt.figure(figsize=(8, max(5, n_larvae_with_data * 0.3)))
-                
-                # Create normalized stacked bar chart
-                larva_ids = [larva['id'] for larva in sorted_larvae]
-                upstream_normalized = [larva['upstream']/larva['total'] for larva in sorted_larvae]
-                downstream_normalized = [larva['downstream']/larva['total'] for larva in sorted_larvae]
-                
-                # Create positions
-                y_pos = np.arange(len(larva_ids))
-                
-                # Create normalized stacked bar chart
-                plt.barh(y_pos, upstream_normalized, 
-                        color=genotype_colors[genotype_name]['upstream'], 
-                        alpha=0.7, label='Upstream')
-                plt.barh(y_pos, downstream_normalized, 
-                        left=upstream_normalized, 
-                        color=genotype_colors[genotype_name]['downstream'], 
-                        alpha=0.7, label='Downstream')
-                
-                # Add downstream probability as text
-                for j, larva in enumerate(sorted_larvae):
-                    plt.text(1.02, j, f"{larva['downstream_prob']*100:.0f}%", va='center', fontsize=8)
-                    
-                    # Add total count at the start of each bar
-                    plt.text(-0.05, j, f"{larva['total']}", va='center', ha='right', fontsize=8)
-                
-                # Mark 50% line
-                plt.axvline(x=0.5, color='black', linestyle='--', alpha=0.3)
-                
-                # Format plot
-                plt.yticks(y_pos, larva_ids)
-                plt.xlim(0, 1.15)  # Make room for percentage labels
-                plt.xlabel('Proportion of Casts')
-                plt.ylabel('Larva ID')
-                plt.title(f'{genotype_name} - {cast_type.capitalize()} Cast Direction Breakdown\n' + 
-                         f'(n={n_larvae_with_data} larvae, {sum(larva["total"] for larva in sorted_larvae)} casts)')
-                plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=2)
-                plt.tight_layout()
-                
-                # Save figure if basepath is provided
-                if basepath is not None:
-                    safe_name = ''.join(c if c.isalnum() else '_' for c in genotype_name)
-                    figname = f"{basepath}/cast_directions_per_larva_{safe_name}_{cast_type}_{timestamp}.png"
-                    plt.savefig(figname, dpi=300, bbox_inches='tight')
-                
-                plt.show()
+        plt.show()
     
     # Save statistical results to text file
     if basepath is not None:
@@ -9625,11 +11889,11 @@ def compare_cast_directions_peaks(genotype1_data, genotype2_data, labels=None, a
         'jump_threshold': jump_threshold
     }
 
-def compare_cast_amplitudes_by_direction(genotype1_data, genotype2_data, labels=None, angle_width=5, 
-                                        smooth_window=5, jump_threshold=15, basepath=None):
+def compare_cast_amplitudes_by_direction_peaks(genotype1_data, genotype2_data, labels=None, angle_width=5, 
+                                              smooth_window=5, jump_threshold=15, basepath=None):
     """
     Compare bend amplitudes between upstream and downstream casts for two genotypes when larvae are perpendicular to flow.
-    Uses sophisticated peak detection to classify casts and measure their amplitudes.
+    Analyzes all peaks, first peaks, and last peaks separately to identify differences at different phases of casts.
     
     Parameters:
     -----------
@@ -9650,7 +11914,7 @@ def compare_cast_amplitudes_by_direction(genotype1_data, genotype2_data, labels=
         
     Returns:
     --------
-    dict: Contains comparison statistics and test results
+    dict: Contains comparison statistics and test results for different peak types
     """
     from scipy import stats
     from scipy.ndimage import gaussian_filter1d
@@ -9688,26 +11952,32 @@ def compare_cast_amplitudes_by_direction(genotype1_data, genotype2_data, labels=
     
     def analyze_peaks_in_genotype(genotype_data):
         """Analyze cast peaks and store bend amplitudes within a genotype"""
-        # Store bend amplitudes for each cast type and direction
-        cast_amplitudes = {
-            'small': {'upstream': [], 'downstream': [], 'larva_ids': []},
-            'large': {'upstream': [], 'downstream': [], 'larva_ids': []},
-            'all': {'upstream': [], 'downstream': [], 'larva_ids': []}
-        }
+        # Define peak types
+        peak_types = ['all', 'first', 'last']
         
-        # Store per-larva amplitudes
-        per_larva_amplitudes = {
-            'small': {'upstream': [], 'downstream': [], 'larva_ids': []},
-            'large': {'upstream': [], 'downstream': [], 'larva_ids': []},
-            'all': {'upstream': [], 'downstream': [], 'larva_ids': []}
-        }
+        # Store bend amplitudes for each cast type, direction, and peak type
+        cast_amplitudes = {}
+        per_larva_amplitudes = {}
+        total_counts = {}
         
-        # Store raw counts for analysis
-        total_counts = {
-            'small': {'upstream': 0, 'downstream': 0},
-            'large': {'upstream': 0, 'downstream': 0},
-            'all': {'upstream': 0, 'downstream': 0}
-        }
+        for peak_type in peak_types:
+            cast_amplitudes[peak_type] = {
+                'small': {'upstream': [], 'downstream': [], 'larva_ids': []},
+                'large': {'upstream': [], 'downstream': [], 'larva_ids': []},
+                'all': {'upstream': [], 'downstream': [], 'larva_ids': []}
+            }
+            
+            per_larva_amplitudes[peak_type] = {
+                'small': {'upstream': [], 'downstream': [], 'larva_ids': []},
+                'large': {'upstream': [], 'downstream': [], 'larva_ids': []},
+                'all': {'upstream': [], 'downstream': [], 'larva_ids': []}
+            }
+            
+            total_counts[peak_type] = {
+                'small': {'upstream': 0, 'downstream': 0},
+                'large': {'upstream': 0, 'downstream': 0},
+                'all': {'upstream': 0, 'downstream': 0}
+            }
         
         # Determine which data structure we're working with
         if 'data' in genotype_data:
@@ -9808,115 +12078,241 @@ def compare_cast_amplitudes_by_direction(genotype1_data, genotype2_data, labels=
                 # Apply smoothing
                 orientation_smooth = gaussian_filter1d(orientation_interp, smooth_window/3.0)
                 
-                # 2. Intelligent peak detection for bend angle
-                # Calculate slope changes
-                bend_angle_diff = np.diff(angle_upper_lower_deg)
-                # Add zero at the beginning to match length
-                bend_angle_diff = np.insert(bend_angle_diff, 0, 0)
-                
-                # Smooth the bend angle
+                # 2. Smooth the bend angle
                 bend_angle_smooth = gaussian_filter1d(angle_upper_lower_deg, smooth_window/3.0)
                 
-                # Find peaks with intelligent filtering:
-                pos_peaks, _ = find_peaks(
-                    bend_angle_smooth, 
-                    height=5,        
-                    prominence=3,        
-                    distance=5
-                )
-                
-                neg_peaks, _ = find_peaks(
-                    -bend_angle_smooth, 
-                    height=5,        
-                    prominence=3,        
-                    distance=5
-                )
-                
-                # Combine positive and negative peaks
-                all_peaks = np.union1d(pos_peaks, neg_peaks)
-                
-                # Filter out peaks that start from flat regions
-                slope_threshold = 0.5  # Define what's considered "flat"
-                filtered_peaks = []
-                for peak in all_peaks:
-                    if peak > 0 and abs(bend_angle_diff[peak-1]) > slope_threshold:
-                        filtered_peaks.append(peak)
-                
-                # Storage for cast amplitudes by type and direction
-                larva_amplitudes = {
-                    'large': {'upstream': [], 'downstream': []},
-                    'small': {'upstream': [], 'downstream': []},
-                    'all': {'upstream': [], 'downstream': []}
+                # 3. Find continuous cast segments
+                cast_segments = {
+                    'large': [],
+                    'small': []
                 }
                 
-                # Process each peak to classify as upstream or downstream and store amplitude
-                for peak in filtered_peaks:
-                    # Only consider peaks during cast behaviors that are perpendicular to flow
-                    is_large_cast = large_cast_mask[peak]
-                    is_small_cast = small_cast_mask[peak]
-                    is_any_cast = any_cast_mask[peak]
-                    is_perp = is_perpendicular(orientation_smooth[peak])
-                    
-                    if is_perp:  # Only analyze peaks when orientation is perpendicular
-                        # Get orientation at time of peak (after smoothing)
-                        orientation = orientation_smooth[peak]
-                        bend_angle = bend_angle_smooth[peak]
-                        
-                        # Normalize orientation to -180 to 180 range
-                        while orientation > 180:
-                            orientation -= 360
-                        while orientation <= -180:
-                            orientation += 360
-                        
-                        # Classify as upstream or downstream based on orientation and bend direction
-                        is_upstream = False
-                        if (orientation > 0 and orientation < 180):  # Right side
-                            if bend_angle < 0:  # Negative bend is upstream
-                                is_upstream = True
-                            else:  # Positive bend is downstream
-                                is_upstream = False
-                        else:  # Left side
-                            if bend_angle > 0:  # Positive bend is upstream
-                                is_upstream = True
-                            else:  # Negative bend is downstream
-                                is_upstream = False
-                        
-                        # Store the absolute amplitude of the bend
-                        cast_direction = 'upstream' if is_upstream else 'downstream'
-                        amplitude = abs(bend_angle)  # Absolute value of bend angle
-                        
-                        if is_large_cast:
-                            larva_amplitudes['large'][cast_direction].append(amplitude)
-                        if is_small_cast:
-                            larva_amplitudes['small'][cast_direction].append(amplitude)
-                        if is_any_cast:
-                            larva_amplitudes['all'][cast_direction].append(amplitude)
+                # Find large cast segments
+                in_segment = False
+                start_idx = 0
+                for i, is_cast in enumerate(large_cast_mask):
+                    if is_cast and not in_segment:
+                        # Start of new segment
+                        in_segment = True
+                        start_idx = i
+                    elif not is_cast and in_segment:
+                        # End of segment
+                        in_segment = False
+                        if i - start_idx >= 3:  # Require minimum length
+                            cast_segments['large'].append((start_idx, i))
                 
-                # Only include larvae with sufficient cast data
+                # Handle case when still in segment at end of data
+                if in_segment and len(large_cast_mask) - start_idx >= 3:
+                    cast_segments['large'].append((start_idx, len(large_cast_mask)))
+                
+                # Find small cast segments
+                in_segment = False
+                start_idx = 0
+                for i, is_cast in enumerate(small_cast_mask):
+                    if is_cast and not in_segment:
+                        # Start of new segment
+                        in_segment = True
+                        start_idx = i
+                    elif not is_cast and in_segment:
+                        # End of segment
+                        in_segment = False
+                        if i - start_idx >= 3:  # Require minimum length
+                            cast_segments['small'].append((start_idx, i))
+                
+                # Handle case when still in segment at end of data
+                if in_segment and len(small_cast_mask) - start_idx >= 3:
+                    cast_segments['small'].append((start_idx, len(small_cast_mask)))
+                
+                # 4. Find peaks within each cast segment
+                all_peaks = {
+                    'large': [],
+                    'small': []
+                }
+                
+                first_peaks = {
+                    'large': [],
+                    'small': []
+                }
+                
+                last_peaks = {
+                    'large': [],
+                    'small': []
+                }
+                
+                # Process each cast type
+                for cast_type in ['large', 'small']:
+                    for start, end in cast_segments[cast_type]:
+                        segment_angles = bend_angle_smooth[start:end]
+                        
+                        # Find peaks in absolute bend angles
+                        abs_angles = np.abs(segment_angles)
+                        
+                        # Find positive and negative peaks
+                        pos_peaks, _ = find_peaks(segment_angles, height=5, prominence=3, distance=3)
+                        neg_peaks, _ = find_peaks(-segment_angles, height=5, prominence=3, distance=3)
+                        
+                        # Combine and sort peaks by position
+                        segment_peaks = sorted(list(pos_peaks) + list(neg_peaks))
+                        
+                        if len(segment_peaks) > 0:
+                            # Add all peaks to global frame reference
+                            global_peaks = [start + idx for idx in segment_peaks]
+                            all_peaks[cast_type].extend(global_peaks)
+                            
+                            # Add first peak
+                            first_peaks[cast_type].append(start + segment_peaks[0])
+                            
+                            # Add last peak
+                            last_peaks[cast_type].append(start + segment_peaks[-1])
+                
+                # 5. Create storage for larva's amplitudes by cast type, peak type, and direction
+                larva_amplitudes = {}
+                for peak_type in peak_types:
+                    larva_amplitudes[peak_type] = {
+                        'large': {'upstream': [], 'downstream': []},
+                        'small': {'upstream': [], 'downstream': []},
+                        'all': {'upstream': [], 'downstream': []}
+                    }
+                
+                # 6. Process peaks to classify as upstream or downstream and store amplitude
+                # Process all peaks
+                for cast_type in ['large', 'small']:
+                    for peak_idx in all_peaks[cast_type]:
+                        if is_perpendicular(orientation_smooth[peak_idx]):
+                            # Get orientation and bend angle at peak
+                            orientation = orientation_smooth[peak_idx]
+                            bend_angle = bend_angle_smooth[peak_idx]
+                            
+                            # Normalize orientation to -180 to 180 range
+                            while orientation > 180:
+                                orientation -= 360
+                            while orientation <= -180:
+                                orientation += 360
+                            
+                            # Classify as upstream or downstream based on orientation and bend direction
+                            is_upstream = False
+                            if (orientation > 0 and orientation < 180):  # Right side
+                                if bend_angle < 0:  # Negative bend is upstream
+                                    is_upstream = True
+                                else:  # Positive bend is downstream
+                                    is_upstream = False
+                            else:  # Left side
+                                if bend_angle > 0:  # Positive bend is upstream
+                                    is_upstream = True
+                                else:  # Negative bend is downstream
+                                    is_upstream = False
+                            
+                            # Store the absolute amplitude of the bend
+                            cast_direction = 'upstream' if is_upstream else 'downstream'
+                            amplitude = abs(bend_angle)  # Absolute value of bend angle
+                            
+                            # Store in all peaks category
+                            larva_amplitudes['all'][cast_type][cast_direction].append(amplitude)
+                            
+                            # Also store in all casts category
+                            larva_amplitudes['all']['all'][cast_direction].append(amplitude)
+                
+                # Process first peaks
+                for cast_type in ['large', 'small']:
+                    for peak_idx in first_peaks[cast_type]:
+                        if is_perpendicular(orientation_smooth[peak_idx]):
+                            # Get orientation and bend angle at peak
+                            orientation = orientation_smooth[peak_idx]
+                            bend_angle = bend_angle_smooth[peak_idx]
+                            
+                            # Normalize orientation to -180 to 180 range
+                            while orientation > 180:
+                                orientation -= 360
+                            while orientation <= -180:
+                                orientation += 360
+                            
+                            # Classify as upstream or downstream
+                            is_upstream = False
+                            if (orientation > 0 and orientation < 180):  # Right side
+                                if bend_angle < 0:  # Negative bend is upstream
+                                    is_upstream = True
+                                else:  # Positive bend is downstream
+                                    is_upstream = False
+                            else:  # Left side
+                                if bend_angle > 0:  # Positive bend is upstream
+                                    is_upstream = True
+                                else:  # Negative bend is downstream
+                                    is_upstream = False
+                            
+                            # Store the absolute amplitude of the bend
+                            cast_direction = 'upstream' if is_upstream else 'downstream'
+                            amplitude = abs(bend_angle)  # Absolute value of bend angle
+                            
+                            # Store in first peaks category
+                            larva_amplitudes['first'][cast_type][cast_direction].append(amplitude)
+                            
+                            # Also store in all casts category
+                            larva_amplitudes['first']['all'][cast_direction].append(amplitude)
+                
+                # Process last peaks
+                for cast_type in ['large', 'small']:
+                    for peak_idx in last_peaks[cast_type]:
+                        if is_perpendicular(orientation_smooth[peak_idx]):
+                            # Get orientation and bend angle at peak
+                            orientation = orientation_smooth[peak_idx]
+                            bend_angle = bend_angle_smooth[peak_idx]
+                            
+                            # Normalize orientation to -180 to 180 range
+                            while orientation > 180:
+                                orientation -= 360
+                            while orientation <= -180:
+                                orientation += 360
+                            
+                            # Classify as upstream or downstream
+                            is_upstream = False
+                            if (orientation > 0 and orientation < 180):  # Right side
+                                if bend_angle < 0:  # Negative bend is upstream
+                                    is_upstream = True
+                                else:  # Positive bend is downstream
+                                    is_upstream = False
+                            else:  # Left side
+                                if bend_angle > 0:  # Positive bend is upstream
+                                    is_upstream = True
+                                else:  # Negative bend is downstream
+                                    is_upstream = False
+                            
+                            # Store the absolute amplitude of the bend
+                            cast_direction = 'upstream' if is_upstream else 'downstream'
+                            amplitude = abs(bend_angle)  # Absolute value of bend angle
+                            
+                            # Store in last peaks category
+                            larva_amplitudes['last'][cast_type][cast_direction].append(amplitude)
+                            
+                            # Also store in all casts category
+                            larva_amplitudes['last']['all'][cast_direction].append(amplitude)
+                
+                # 7. Only include larvae with sufficient cast data and update overall statistics
                 has_casts = False
-                for cast_type in ['large', 'small', 'all']:
-                    upstream_amps = larva_amplitudes[cast_type]['upstream']
-                    downstream_amps = larva_amplitudes[cast_type]['downstream']
-                    
-                    # Require at least 3 casts in each direction for reliable analysis
-                    if len(upstream_amps) >= 3 and len(downstream_amps) >= 3:
-                        has_casts = True
+                
+                for peak_type in peak_types:
+                    for cast_type in ['large', 'small', 'all']:
+                        upstream_amps = larva_amplitudes[peak_type][cast_type]['upstream']
+                        downstream_amps = larva_amplitudes[peak_type][cast_type]['downstream']
                         
-                        # Add to total counts
-                        total_counts[cast_type]['upstream'] += len(upstream_amps)
-                        total_counts[cast_type]['downstream'] += len(downstream_amps)
-                        
-                        # Add to overall amplitude lists
-                        cast_amplitudes[cast_type]['upstream'].extend(upstream_amps)
-                        cast_amplitudes[cast_type]['downstream'].extend(downstream_amps)
-                        
-                        # For tracking which larva contributed to each amplitude
-                        cast_amplitudes[cast_type]['larva_ids'].extend([str(larva_id)] * (len(upstream_amps) + len(downstream_amps)))
-                        
-                        # Store per-larva amplitude lists for paired analysis
-                        per_larva_amplitudes[cast_type]['upstream'].append(upstream_amps)
-                        per_larva_amplitudes[cast_type]['downstream'].append(downstream_amps)
-                        per_larva_amplitudes[cast_type]['larva_ids'].append(str(larva_id))
+                        # Require at least 3 casts in each direction for reliable analysis
+                        if len(upstream_amps) >= 3 and len(downstream_amps) >= 3:
+                            has_casts = True
+                            
+                            # Add to total counts
+                            total_counts[peak_type][cast_type]['upstream'] += len(upstream_amps)
+                            total_counts[peak_type][cast_type]['downstream'] += len(downstream_amps)
+                            
+                            # Add to overall amplitude lists
+                            cast_amplitudes[peak_type][cast_type]['upstream'].extend(upstream_amps)
+                            cast_amplitudes[peak_type][cast_type]['downstream'].extend(downstream_amps)
+                            
+                            # For tracking which larva contributed to each amplitude
+                            cast_amplitudes[peak_type][cast_type]['larva_ids'].extend([str(larva_id)] * (len(upstream_amps) + len(downstream_amps)))
+                            
+                            # Store per-larva amplitude lists for paired analysis
+                            per_larva_amplitudes[peak_type][cast_type]['upstream'].append(upstream_amps)
+                            per_larva_amplitudes[peak_type][cast_type]['downstream'].append(downstream_amps)
+                            per_larva_amplitudes[peak_type][cast_type]['larva_ids'].append(str(larva_id))
                 
                 if has_casts:
                     larvae_processed += 1
@@ -9926,53 +12322,57 @@ def compare_cast_amplitudes_by_direction(genotype1_data, genotype2_data, labels=
         
         # Calculate summary statistics for bend amplitudes
         amplitude_stats = {}
-        for cast_type in ['small', 'large', 'all']:
-            upstream_amps = np.array(cast_amplitudes[cast_type]['upstream'])
-            downstream_amps = np.array(cast_amplitudes[cast_type]['downstream'])
+        
+        for peak_type in peak_types:
+            amplitude_stats[peak_type] = {}
             
-            if len(upstream_amps) > 0 and len(downstream_amps) > 0:
-                # Calculate means and SEMs
-                amplitude_stats[cast_type] = {
-                    'upstream': {
-                        'mean': np.mean(upstream_amps),
-                        'sem': stats.sem(upstream_amps) if len(upstream_amps) > 1 else 0,
-                        'n': len(upstream_amps)
-                    },
-                    'downstream': {
-                        'mean': np.mean(downstream_amps),
-                        'sem': stats.sem(downstream_amps) if len(downstream_amps) > 1 else 0,
-                        'n': len(downstream_amps)
+            for cast_type in ['small', 'large', 'all']:
+                upstream_amps = np.array(cast_amplitudes[peak_type][cast_type]['upstream'])
+                downstream_amps = np.array(cast_amplitudes[peak_type][cast_type]['downstream'])
+                
+                if len(upstream_amps) > 0 and len(downstream_amps) > 0:
+                    # Calculate means and SEMs
+                    amplitude_stats[peak_type][cast_type] = {
+                        'upstream': {
+                            'mean': np.mean(upstream_amps),
+                            'sem': stats.sem(upstream_amps) if len(upstream_amps) > 1 else 0,
+                            'n': len(upstream_amps)
+                        },
+                        'downstream': {
+                            'mean': np.mean(downstream_amps),
+                            'sem': stats.sem(downstream_amps) if len(downstream_amps) > 1 else 0,
+                            'n': len(downstream_amps)
+                        }
                     }
-                }
-                
-                # Perform statistical tests
-                # Independent t-test (unpaired) for all amplitudes
-                tstat, pval = stats.ttest_ind(upstream_amps, downstream_amps, equal_var=False)
-                amplitude_stats[cast_type]['ttest_ind'] = {
-                    'tstat': tstat,
-                    'pval': pval
-                }
-                
-                # Calculate mean amplitudes per larva for paired tests
-                larvae_mean_upstream = []
-                larvae_mean_downstream = []
-                
-                for ups, downs in zip(per_larva_amplitudes[cast_type]['upstream'], 
-                                     per_larva_amplitudes[cast_type]['downstream']):
-                    if len(ups) > 0 and len(downs) > 0:
-                        larvae_mean_upstream.append(np.mean(ups))
-                        larvae_mean_downstream.append(np.mean(downs))
-                
-                # Paired t-test if we have per-larva data
-                if len(larvae_mean_upstream) > 1:
-                    tstat_paired, pval_paired = stats.ttest_rel(larvae_mean_upstream, larvae_mean_downstream)
-                    amplitude_stats[cast_type]['ttest_paired'] = {
-                        'tstat': tstat_paired,
-                        'pval': pval_paired,
-                        'n_larvae': len(larvae_mean_upstream)
+                    
+                    # Perform statistical tests
+                    # Independent t-test (unpaired) for all amplitudes
+                    tstat, pval = stats.ttest_ind(upstream_amps, downstream_amps, equal_var=False)
+                    amplitude_stats[peak_type][cast_type]['ttest_ind'] = {
+                        'tstat': tstat,
+                        'pval': pval
                     }
-            else:
-                amplitude_stats[cast_type] = None
+                    
+                    # Calculate mean amplitudes per larva for paired tests
+                    larvae_mean_upstream = []
+                    larvae_mean_downstream = []
+                    
+                    for ups, downs in zip(per_larva_amplitudes[peak_type][cast_type]['upstream'], 
+                                         per_larva_amplitudes[peak_type][cast_type]['downstream']):
+                        if len(ups) > 0 and len(downs) > 0:
+                            larvae_mean_upstream.append(np.mean(ups))
+                            larvae_mean_downstream.append(np.mean(downs))
+                    
+                    # Paired t-test if we have per-larva data
+                    if len(larvae_mean_upstream) > 1:
+                        tstat_paired, pval_paired = stats.ttest_rel(larvae_mean_upstream, larvae_mean_downstream)
+                        amplitude_stats[peak_type][cast_type]['ttest_paired'] = {
+                            'tstat': tstat_paired,
+                            'pval': pval_paired,
+                            'n_larvae': len(larvae_mean_upstream)
+                        }
+                else:
+                    amplitude_stats[peak_type][cast_type] = None
         
         return {
             'cast_amplitudes': cast_amplitudes,
@@ -9997,7 +12397,8 @@ def compare_cast_amplitudes_by_direction(genotype1_data, genotype2_data, labels=
         'statistical_tests': {}
     }
     
-    # Cast types to analyze
+    # Define peak types and cast types to analyze
+    peak_types = ['all', 'first', 'last']
     cast_types = ['all', 'large', 'small']
     
     # Colors for each condition
@@ -10012,28 +12413,6 @@ def compare_cast_amplitudes_by_direction(genotype1_data, genotype2_data, labels=
         }
     }
     
-    # Count valid cast types (those with data in both genotypes)
-    valid_cast_types = []
-    for cast_type in cast_types:
-        g1_stats = genotype1_results['amplitude_stats'].get(cast_type)
-        g2_stats = genotype2_results['amplitude_stats'].get(cast_type)
-        
-        if g1_stats and g2_stats:
-            valid_cast_types.append(cast_type)
-    
-    n_cast_types = len(valid_cast_types)
-    
-    if n_cast_types == 0:
-        print("No cast data found in both genotypes. Skipping plots.")
-        return comparison_results
-    
-    # Create figure for comparison
-    fig, axes = plt.subplots(1, n_cast_types, figsize=(5 * n_cast_types, 6))
-    
-    # Handle the case of a single subplot
-    if n_cast_types == 1:
-        axes = [axes]
-    
     # Variable to store statistical results for text file
     stat_results_txt = []
     stat_results_txt.append(f"Cast Amplitude Comparison: {labels[0]} vs {labels[1]}")
@@ -10042,196 +12421,228 @@ def compare_cast_amplitudes_by_direction(genotype1_data, genotype2_data, labels=
     stat_results_txt.append(f"Using improved peak detection with jump_threshold={jump_threshold} and smooth_window={smooth_window}")
     stat_results_txt.append("\n")
     
-    # Process each cast type
-    for ax_idx, cast_type in enumerate(valid_cast_types):
-        ax = axes[ax_idx]
+    # Process each peak type separately (create a figure for each peak type)
+    for peak_type in peak_types:
+        # Count valid cast types for this peak type (those with data in both genotypes)
+        valid_cast_types = []
+        for cast_type in cast_types:
+            g1_stats = genotype1_results['amplitude_stats'].get(peak_type, {}).get(cast_type)
+            g2_stats = genotype2_results['amplitude_stats'].get(peak_type, {}).get(cast_type)
+            
+            if g1_stats and g2_stats:
+                valid_cast_types.append(cast_type)
         
-        # Extract amplitude data
-        g1_upstream = np.array(genotype1_results['cast_amplitudes'][cast_type]['upstream'])
-        g1_downstream = np.array(genotype1_results['cast_amplitudes'][cast_type]['downstream'])
-        g2_upstream = np.array(genotype2_results['cast_amplitudes'][cast_type]['upstream'])
-        g2_downstream = np.array(genotype2_results['cast_amplitudes'][cast_type]['downstream'])
+        n_cast_types = len(valid_cast_types)
         
-        # Data for box plot
-        data = [g1_upstream, g1_downstream, g2_upstream, g2_downstream]
-        positions = [1, 2, 4, 5]
-        labels_box = [f'{labels[0]}\nUpstream', f'{labels[0]}\nDownstream', 
-                     f'{labels[1]}\nUpstream', f'{labels[1]}\nDownstream']
+        if n_cast_types == 0:
+            print(f"No valid cast data found for {peak_type} peaks in both genotypes. Skipping plot.")
+            continue
         
-        # Create box plot
-        bp = ax.boxplot(data, positions=positions, notch=True, patch_artist=True, 
-                       widths=0.6, showfliers=False)
+        # Create figure for comparison
+        fig, axes = plt.subplots(1, n_cast_types, figsize=(5 * n_cast_types, 6))
         
-        # Color boxes by condition
-        colors = [condition_colors['upstream'][labels[0]], 
-                 condition_colors['downstream'][labels[0]],
-                 condition_colors['upstream'][labels[1]], 
-                 condition_colors['downstream'][labels[1]]]
+        # Handle the case of a single subplot
+        if n_cast_types == 1:
+            axes = [axes]
         
-        for i, box in enumerate(bp['boxes']):
-            box.set(facecolor=colors[i], alpha=0.6)
-            bp['medians'][i].set(color='black', linewidth=1.5)
-        
-        # Add individual data points with jitter
-        for i, (pos, d) in enumerate(zip(positions, data)):
-            # Limit to max 100 points for clarity
-            if len(d) > 100:
-                # Stratified sampling to ensure representation of the distribution
-                indices = np.linspace(0, len(d)-1, 100, dtype=int)
-                d_sampled = d[indices]
+        # Process each cast type
+        for ax_idx, cast_type in enumerate(valid_cast_types):
+            ax = axes[ax_idx]
+            
+            # Extract amplitude data
+            g1_upstream = np.array(genotype1_results['cast_amplitudes'][peak_type][cast_type]['upstream'])
+            g1_downstream = np.array(genotype1_results['cast_amplitudes'][peak_type][cast_type]['downstream'])
+            g2_upstream = np.array(genotype2_results['cast_amplitudes'][peak_type][cast_type]['upstream'])
+            g2_downstream = np.array(genotype2_results['cast_amplitudes'][peak_type][cast_type]['downstream'])
+            
+            # Data for box plot
+            data = [g1_upstream, g1_downstream, g2_upstream, g2_downstream]
+            positions = [1, 2, 4, 5]
+            labels_box = [f'{labels[0]}\nUpstream', f'{labels[0]}\nDownstream', 
+                         f'{labels[1]}\nUpstream', f'{labels[1]}\nDownstream']
+            
+            # Create box plot
+            bp = ax.boxplot(data, positions=positions, notch=True, patch_artist=True, 
+                           widths=0.6, showfliers=False)
+            
+            # Color boxes by condition
+            colors = [condition_colors['upstream'][labels[0]], 
+                     condition_colors['downstream'][labels[0]],
+                     condition_colors['upstream'][labels[1]], 
+                     condition_colors['downstream'][labels[1]]]
+            
+            for i, box in enumerate(bp['boxes']):
+                box.set(facecolor=colors[i], alpha=0.6)
+                bp['medians'][i].set(color='black', linewidth=1.5)
+            
+            # Add individual data points with jitter
+            for i, (pos, d) in enumerate(zip(positions, data)):
+                # Limit to max 100 points for clarity
+                if len(d) > 100:
+                    # Stratified sampling to ensure representation of the distribution
+                    indices = np.linspace(0, len(d)-1, 100, dtype=int)
+                    d_sampled = d[indices]
+                else:
+                    d_sampled = d
+                    
+                jitter = 0.1 * np.random.randn(len(d_sampled))
+                ax.scatter(pos + jitter, d_sampled, s=25, alpha=0.5, color=colors[i], 
+                          edgecolor='k', linewidth=0.5)
+            
+            # Add annotations: mean ± SEM
+            for i, (pos, d) in enumerate(zip(positions, data)):
+                mean = np.mean(d)
+                sem = stats.sem(d) if len(d) > 1 else 0
+                ax.text(pos, np.max(d) + 5, f"{mean:.1f}±{sem:.1f}°", ha='center', 
+                       fontsize=9, bbox=dict(facecolor='white', alpha=0.7, pad=0.1))
+            
+            # Add count annotations
+            ax.text(1, -5, f"n={len(g1_upstream)}", ha='center', va='top', fontsize=8)
+            ax.text(2, -5, f"n={len(g1_downstream)}", ha='center', va='top', fontsize=8)
+            ax.text(4, -5, f"n={len(g2_upstream)}", ha='center', va='top', fontsize=8)
+            ax.text(5, -5, f"n={len(g2_downstream)}", ha='center', va='top', fontsize=8)
+            
+            # Add statistical tests for upstream vs downstream within genotypes
+            # For first genotype
+            g1_stats = genotype1_results['amplitude_stats'][peak_type][cast_type]
+            g1_pval = g1_stats['ttest_ind']['pval']
+            
+            if g1_pval < 0.001:
+                g1_ptext = "p<0.001 ***"
+            elif g1_pval < 0.01:
+                g1_ptext = "p<0.01 **"
+            elif g1_pval < 0.05:
+                g1_ptext = f"p={g1_pval:.3f} *"
             else:
-                d_sampled = d
+                g1_ptext = f"p={g1_pval:.3f}"
                 
-            jitter = 0.1 * np.random.randn(len(d_sampled))
-            ax.scatter(pos + jitter, d_sampled, s=25, alpha=0.5, color=colors[i], 
-                      edgecolor='k', linewidth=0.5)
-        
-        # Add annotations: mean ± SEM
-        for i, (pos, d) in enumerate(zip(positions, data)):
-            mean = np.mean(d)
-            sem = stats.sem(d) if len(d) > 1 else 0
-            ax.text(pos, np.max(d) + 5, f"{mean:.1f}±{sem:.1f}°", ha='center', 
-                   fontsize=9, bbox=dict(facecolor='white', alpha=0.7, pad=0.1))
-        
-        # Add count annotations
-        ax.text(1, -5, f"n={len(g1_upstream)}", ha='center', va='top', fontsize=8)
-        ax.text(2, -5, f"n={len(g1_downstream)}", ha='center', va='top', fontsize=8)
-        ax.text(4, -5, f"n={len(g2_upstream)}", ha='center', va='top', fontsize=8)
-        ax.text(5, -5, f"n={len(g2_downstream)}", ha='center', va='top', fontsize=8)
-        
-        # Add statistical tests for upstream vs downstream within genotypes
-        # For first genotype
-        g1_stats = genotype1_results['amplitude_stats'][cast_type]
-        g1_pval = g1_stats['ttest_ind']['pval']
-        
-        if g1_pval < 0.001:
-            g1_ptext = "p<0.001 ***"
-        elif g1_pval < 0.01:
-            g1_ptext = "p<0.01 **"
-        elif g1_pval < 0.05:
-            g1_ptext = f"p={g1_pval:.3f} *"
-        else:
-            g1_ptext = f"p={g1_pval:.3f}"
+            # Add line and p-value for first genotype
+            g1_maxheight = max(np.max(g1_upstream), np.max(g1_downstream)) + 10
+            ax.plot([1, 2], [g1_maxheight, g1_maxheight], 'k-', lw=1)
+            ax.text(1.5, g1_maxheight + 2, g1_ptext, ha='center', va='bottom', fontsize=9)
             
-        # Add line and p-value for first genotype
-        g1_maxheight = max(np.max(g1_upstream), np.max(g1_downstream)) + 10
-        ax.plot([1, 2], [g1_maxheight, g1_maxheight], 'k-', lw=1)
-        ax.text(1.5, g1_maxheight + 2, g1_ptext, ha='center', va='bottom', fontsize=9)
-        
-        # For second genotype
-        g2_stats = genotype2_results['amplitude_stats'][cast_type]
-        g2_pval = g2_stats['ttest_ind']['pval']
-        
-        if g2_pval < 0.001:
-            g2_ptext = "p<0.001 ***"
-        elif g2_pval < 0.01:
-            g2_ptext = "p<0.01 **"
-        elif g2_pval < 0.05:
-            g2_ptext = f"p={g2_pval:.3f} *"
-        else:
-            g2_ptext = f"p={g2_pval:.3f}"
+            # For second genotype
+            g2_stats = genotype2_results['amplitude_stats'][peak_type][cast_type]
+            g2_pval = g2_stats['ttest_ind']['pval']
             
-        # Add line and p-value for second genotype
-        g2_maxheight = max(np.max(g2_upstream), np.max(g2_downstream)) + 10
-        ax.plot([4, 5], [g2_maxheight, g2_maxheight], 'k-', lw=1)
-        ax.text(4.5, g2_maxheight + 2, g2_ptext, ha='center', va='bottom', fontsize=9)
+            if g2_pval < 0.001:
+                g2_ptext = "p<0.001 ***"
+            elif g2_pval < 0.01:
+                g2_ptext = "p<0.01 **"
+            elif g2_pval < 0.05:
+                g2_ptext = f"p={g2_pval:.3f} *"
+            else:
+                g2_ptext = f"p={g2_pval:.3f}"
+                
+            # Add line and p-value for second genotype
+            g2_maxheight = max(np.max(g2_upstream), np.max(g2_downstream)) + 10
+            ax.plot([4, 5], [g2_maxheight, g2_maxheight], 'k-', lw=1)
+            ax.text(4.5, g2_maxheight + 2, g2_ptext, ha='center', va='bottom', fontsize=9)
+            
+            # Add comparison between genotypes for upstream and downstream
+            # Upstream comparison (g1_upstream vs g2_upstream)
+            tstat_up, pval_up = stats.ttest_ind(g1_upstream, g2_upstream, equal_var=False)
+            comparison_results['statistical_tests'][f'{peak_type}_{cast_type}_upstream'] = {
+                'tstat': tstat_up, 
+                'pval': pval_up
+            }
+            
+            if pval_up < 0.001:
+                up_ptext = "p<0.001 ***"
+            elif pval_up < 0.01:
+                up_ptext = "p<0.01 **"
+            elif pval_up < 0.05:
+                up_ptext = f"p={pval_up:.3f} *"
+            else:
+                up_ptext = f"p={pval_up:.3f}"
+                
+            # Add line for upstream comparison
+            up_maxheight = max(np.max(g1_upstream), np.max(g2_upstream)) + 15
+            ax.plot([1, 4], [up_maxheight, up_maxheight], 'k-', lw=1)
+            ax.text(2.5, up_maxheight + 2, up_ptext, ha='center', va='bottom', fontsize=9)
+            
+            # Downstream comparison (g1_downstream vs g2_downstream)
+            tstat_down, pval_down = stats.ttest_ind(g1_downstream, g2_downstream, equal_var=False)
+            comparison_results['statistical_tests'][f'{peak_type}_{cast_type}_downstream'] = {
+                'tstat': tstat_down, 
+                'pval': pval_down
+            }
+            
+            if pval_down < 0.001:
+                down_ptext = "p<0.001 ***"
+            elif pval_down < 0.01:
+                down_ptext = "p<0.01 **"
+            elif pval_down < 0.05:
+                down_ptext = f"p={pval_down:.3f} *"
+            else:
+                down_ptext = f"p={pval_down:.3f}"
+                
+            # Add line for downstream comparison
+            down_maxheight = max(np.max(g1_downstream), np.max(g2_downstream)) + 20
+            ax.plot([2, 5], [down_maxheight, down_maxheight], 'k-', lw=1, linestyle='--')
+            ax.text(3.5, down_maxheight + 2, down_ptext, ha='center', va='bottom', fontsize=9)
+            
+            # Configure the plot
+            max_y = max(
+                np.max(g1_upstream), np.max(g1_downstream),
+                np.max(g2_upstream), np.max(g2_downstream)
+            ) + 30  # More room for annotations
+            
+            ax.set_ylim(0, max_y)
+            ax.set_ylabel('Bend Amplitude (degrees)')
+            ax.set_xticks(positions)
+            ax.set_xticklabels(labels_box, rotation=45, ha='right')
+            ax.set_title(f'{cast_type.capitalize()} Casts')
+            
+            # Add statistical test results to text output
+            stat_results_txt.append(f"\n{peak_type.capitalize()} Peaks - {cast_type.capitalize()} Casts - Bend Amplitude Comparison:")
+            
+            # Within-genotype comparisons (upstream vs downstream)
+            stat_results_txt.append(f"  Within-genotype comparisons (upstream vs downstream):")
+            stat_results_txt.append(f"    {labels[0]} upstream: {g1_stats['upstream']['mean']:.2f}° ± {g1_stats['upstream']['sem']:.2f}° (n={g1_stats['upstream']['n']})")
+            stat_results_txt.append(f"    {labels[0]} downstream: {g1_stats['downstream']['mean']:.2f}° ± {g1_stats['downstream']['sem']:.2f}° (n={g1_stats['downstream']['n']})")
+            stat_results_txt.append(f"    {labels[0]} comparison: t={g1_stats['ttest_ind']['tstat']:.3f}, p={g1_stats['ttest_ind']['pval']:.4f} {'(significant)' if g1_stats['ttest_ind']['pval'] < 0.05 else ''}")
+            
+            stat_results_txt.append(f"    {labels[1]} upstream: {g2_stats['upstream']['mean']:.2f}° ± {g2_stats['upstream']['sem']:.2f}° (n={g2_stats['upstream']['n']})")
+            stat_results_txt.append(f"    {labels[1]} downstream: {g2_stats['downstream']['mean']:.2f}° ± {g2_stats['downstream']['sem']:.2f}° (n={g2_stats['downstream']['n']})")
+            stat_results_txt.append(f"    {labels[1]} comparison: t={g2_stats['ttest_ind']['tstat']:.3f}, p={g2_stats['ttest_ind']['pval']:.4f} {'(significant)' if g2_stats['ttest_ind']['pval'] < 0.05 else ''}")
+            
+            # Between-genotype comparisons
+            stat_results_txt.append(f"  Between-genotype comparisons:")
+            stat_results_txt.append(f"    Upstream ({labels[0]} vs {labels[1]}): t={tstat_up:.3f}, p={pval_up:.4f} {'(significant)' if pval_up < 0.05 else ''}")
+            stat_results_txt.append(f"    Downstream ({labels[0]} vs {labels[1]}): t={tstat_down:.3f}, p={pval_down:.4f} {'(significant)' if pval_down < 0.05 else ''}")
         
-        # Add comparison between genotypes for upstream and downstream
-        # Upstream comparison (g1_upstream vs g2_upstream)
-        tstat_up, pval_up = stats.ttest_ind(g1_upstream, g2_upstream, equal_var=False)
-        comparison_results['statistical_tests'][f'{cast_type}_upstream'] = {
-            'tstat': tstat_up, 
-            'pval': pval_up
+        # Define peak type titles
+        peak_titles = {
+            'all': 'All Peaks in Cast', 
+            'first': 'First Peak in Cast', 
+            'last': 'Last Peak in Cast'
         }
         
-        if pval_up < 0.001:
-            up_ptext = "p<0.001 ***"
-        elif pval_up < 0.01:
-            up_ptext = "p<0.01 **"
-        elif pval_up < 0.05:
-            up_ptext = f"p={pval_up:.3f} *"
-        else:
-            up_ptext = f"p={pval_up:.3f}"
+        # Add overall title for this peak type
+        fig.suptitle(f'Comparison of Cast Bend Amplitudes: {peak_titles[peak_type]} (±{angle_width}°)', fontsize=14)
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.85, bottom=0.20)  # More space at bottom for labels
+        
+        # Save figure if basepath is provided
+        if basepath is not None:
+            figname = f"{basepath}/cast_amplitude_{peak_type}_peaks_{label1_safe}_vs_{label2_safe}_{timestamp}.png"
+            plt.savefig(figname, dpi=300, bbox_inches='tight')
+            print(f"Saved figure to: {figname}")
             
-        # Add line for upstream comparison
-        up_maxheight = max(np.max(g1_upstream), np.max(g2_upstream)) + 15
-        ax.plot([1, 4], [up_maxheight, up_maxheight], 'k-', lw=1)
-        ax.text(2.5, up_maxheight + 2, up_ptext, ha='center', va='bottom', fontsize=9)
+            # Also save as SVG for publication-quality figure
+            svgname = f"{basepath}/cast_amplitude_{peak_type}_peaks_{label1_safe}_vs_{label2_safe}_{timestamp}.svg"
+            plt.savefig(svgname, format='svg', bbox_inches='tight')
+            print(f"Saved SVG to: {svgname}")
         
-        # Downstream comparison (g1_downstream vs g2_downstream)
-        tstat_down, pval_down = stats.ttest_ind(g1_downstream, g2_downstream, equal_var=False)
-        comparison_results['statistical_tests'][f'{cast_type}_downstream'] = {
-            'tstat': tstat_down, 
-            'pval': pval_down
-        }
-        
-        if pval_down < 0.001:
-            down_ptext = "p<0.001 ***"
-        elif pval_down < 0.01:
-            down_ptext = "p<0.01 **"
-        elif pval_down < 0.05:
-            down_ptext = f"p={pval_down:.3f} *"
-        else:
-            down_ptext = f"p={pval_down:.3f}"
-            
-        # Add line for downstream comparison
-        down_maxheight = max(np.max(g1_downstream), np.max(g2_downstream)) + 20
-        ax.plot([2, 5], [down_maxheight, down_maxheight], 'k-', lw=1, linestyle='--')
-        ax.text(3.5, down_maxheight + 2, down_ptext, ha='center', va='bottom', fontsize=9)
-        
-        # Configure the plot
-        max_y = max(
-            np.max(g1_upstream), np.max(g1_downstream),
-            np.max(g2_upstream), np.max(g2_downstream)
-        ) + 30  # More room for annotations
-        
-        ax.set_ylim(0, max_y)
-        ax.set_ylabel('Bend Amplitude (degrees)')
-        ax.set_xticks(positions)
-        ax.set_xticklabels(labels_box, rotation=45, ha='right')
-        ax.set_title(f'{cast_type.capitalize()} Casts')
-        
-        # Add statistical test results to text output
-        stat_results_txt.append(f"\n{cast_type.capitalize()} Casts - Bend Amplitude Comparison:")
-        
-        # Within-genotype comparisons (upstream vs downstream)
-        stat_results_txt.append(f"  Within-genotype comparisons (upstream vs downstream):")
-        stat_results_txt.append(f"    {labels[0]} upstream: {g1_stats['upstream']['mean']:.2f}° ± {g1_stats['upstream']['sem']:.2f}° (n={g1_stats['upstream']['n']})")
-        stat_results_txt.append(f"    {labels[0]} downstream: {g1_stats['downstream']['mean']:.2f}° ± {g1_stats['downstream']['sem']:.2f}° (n={g1_stats['downstream']['n']})")
-        stat_results_txt.append(f"    {labels[0]} comparison: t={g1_stats['ttest_ind']['tstat']:.3f}, p={g1_stats['ttest_ind']['pval']:.4f} {'(significant)' if g1_stats['ttest_ind']['pval'] < 0.05 else ''}")
-        
-        stat_results_txt.append(f"    {labels[1]} upstream: {g2_stats['upstream']['mean']:.2f}° ± {g2_stats['upstream']['sem']:.2f}° (n={g2_stats['upstream']['n']})")
-        stat_results_txt.append(f"    {labels[1]} downstream: {g2_stats['downstream']['mean']:.2f}° ± {g2_stats['downstream']['sem']:.2f}° (n={g2_stats['downstream']['n']})")
-        stat_results_txt.append(f"    {labels[1]} comparison: t={g2_stats['ttest_ind']['tstat']:.3f}, p={g2_stats['ttest_ind']['pval']:.4f} {'(significant)' if g2_stats['ttest_ind']['pval'] < 0.05 else ''}")
-        
-        # Between-genotype comparisons
-        stat_results_txt.append(f"  Between-genotype comparisons:")
-        stat_results_txt.append(f"    Upstream ({labels[0]} vs {labels[1]}): t={tstat_up:.3f}, p={pval_up:.4f} {'(significant)' if pval_up < 0.05 else ''}")
-        stat_results_txt.append(f"    Downstream ({labels[0]} vs {labels[1]}): t={tstat_down:.3f}, p={pval_down:.4f} {'(significant)' if pval_down < 0.05 else ''}")
+        plt.show()
     
-    # Add overall title
-    fig.suptitle(f'Comparison of Cast Bend Amplitudes When Perpendicular to Flow (±{angle_width}°)', fontsize=14)
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.85, bottom=0.20)  # More space at bottom for labels
-    
-    # Save figure if basepath is provided
+    # Save statistical results to text file
     if basepath is not None:
-        figname = f"{basepath}/cast_amplitude_comparison_{label1_safe}_vs_{label2_safe}_{timestamp}.png"
-        plt.savefig(figname, dpi=300, bbox_inches='tight')
-        print(f"Saved figure to: {figname}")
-        
-        # Also save as SVG for publication-quality figure
-        svgname = f"{basepath}/cast_amplitude_comparison_{label1_safe}_vs_{label2_safe}_{timestamp}.svg"
-        plt.savefig(svgname, format='svg', bbox_inches='tight')
-        print(f"Saved SVG to: {svgname}")
-        
-        # Save statistical results to text file
         txtname = f"{basepath}/cast_amplitude_stats_{label1_safe}_vs_{label2_safe}_{timestamp}.txt"
         with open(txtname, 'w') as f:
             f.write('\n'.join(stat_results_txt))
         print(f"Saved statistics to: {txtname}")
-    
-    plt.show()
     
     # Return results
     return {

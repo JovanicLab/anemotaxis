@@ -96,7 +96,7 @@ def process_single_file(file_path, show_progress=False):
                             larva[f'y_{point}'] = get_array(f'y_{point}')
                     
                     # Get behavior metrics
-                    for field_prefix in ['duration', 't_start_stop', 'start_stop', 'nb_action']:
+                    for field_prefix in ['n_duration','duration', 't_start_stop', 'start_stop', 'nb_action']:
                         for field_suffix in ['large', 'large_small']:
                             field = f'{field_prefix}_{field_suffix}'
                             if field in f['trx']:
@@ -222,65 +222,3 @@ def process_all_trx_files_parallel(base_path, n_processes=None):
     print(f"Total larvae: {metadata['total_larvae']}")
     
     return {'data': all_data, 'metadata': metadata}
-
-def filter_larvae_by_duration(data, min_total_duration=None, percentile=10):
-    """Filter larvae based on their total tracked duration.
-    
-    Args:
-        data: Either single experiment data (dict) or all experiments data (dict with 'data' key)
-        min_total_duration: Minimum total duration in seconds. If None, uses percentile
-        percentile: Percentile threshold (0-100) to use if min_total_duration is None
-        
-    Returns:
-        dict: Filtered data with same structure as input, excluding larvae below threshold
-    """
-    # Handle data type
-    if 'data' in data:
-        extracted_data = data['data']
-        is_multi_exp = True
-    else:
-        extracted_data = data
-        is_multi_exp = False
-    
-    # Calculate total duration for each larva
-    larva_durations = {}
-    for larva_id, larva_data in extracted_data.items():
-        total = 0
-        for durations in larva_data['duration_large_small']:
-            if durations is not None:
-                total += float(np.nansum(durations.flatten()))
-        larva_durations[larva_id] = total
-    
-    # Determine threshold
-    if min_total_duration is None:
-        min_total_duration = np.percentile(list(larva_durations.values()), percentile)
-    
-    # Filter larvae
-    filtered_data = {}
-    for larva_id, total_duration in larva_durations.items():
-        if total_duration >= min_total_duration:
-            filtered_data[larva_id] = extracted_data[larva_id]
-    
-    # Return with appropriate structure
-    if is_multi_exp:
-        return {
-            'data': filtered_data,
-            'metadata': {
-                **data['metadata'],
-                'total_larvae': len(filtered_data),
-                'duration_threshold': min_total_duration,
-                'original_total_larvae': len(extracted_data)
-            }
-        }
-    else:
-        return filtered_data
-    
-def filter_by_behavior_type(data, behavior_type, min_count=1):
-    """Filter larvae that have at least min_count instances of a behavior."""
-    # Implementation here...
-    pass
-
-def filter_by_experiment_date(data, start_date, end_date):
-    """Filter data by experiment date range."""
-    # Implementation here...
-    pass
