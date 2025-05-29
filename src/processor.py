@@ -70,6 +70,110 @@ def filter_by_experiment_date(data, start_date, end_date):
     # Implementation here...
     pass
 
+def filter_larvae_by_excess_stop_time(data, max_stop_percentage=0.5):
+    """
+    Filter out larvae that spend too much time in the stop state.
+    
+    Args:
+        data: Either single experiment data (dict) or all experiments data (dict with 'data' key)
+        max_stop_percentage: Maximum allowed percentage of time in stop state (0.0-1.0)
+        
+    Returns:
+        dict: Filtered data with same structure as input, excluding larvae with too much stop time
+        dict: Statistics about stop time for each larva
+    """
+    import numpy as np
+    import copy
+    
+    # Make a deep copy to avoid modifying original data
+    filtered_data = copy.deepcopy(data)
+    
+    # Handle data structure
+    if 'data' in data:
+        extracted_data = filtered_data['data']
+        is_multi_exp = True
+    else:
+        extracted_data = filtered_data
+        is_multi_exp = False
+    
+    # Track larvae to remove and their statistics
+    larvae_to_remove = []
+    larva_stats = {}
+    
+    # Analyze each larva
+    for larva_id, larva_data in list(extracted_data.items()):
+        # Skip if necessary data is not available
+        if 'global_state_large_state' not in larva_data or 't' not in larva_data:
+            continue
+            
+        # Get the behavior states and time data
+        states = np.array(larva_data['global_state_large_state']).flatten()
+        times = np.array(larva_data['t']).flatten()
+        
+        # Calculate total tracked time
+        total_time = times[-1] - times[0]
+        
+        # Identify stop states (3.0 for large_stop, 2.5 for small_stop)
+        stop_states = [3.0, 2.5]
+        stop_mask = np.isin(states, stop_states)
+        
+        # Calculate time spent in each state
+        time_in_states = {}
+        current_state = None
+        state_start_time = None
+        
+        for i in range(len(states)):
+            state = states[i]
+            time = times[i]
+            
+            # State transition or end of sequence
+            if state != current_state or i == len(states) - 1:
+                # Record previous state duration if there was one
+                if current_state is not None and state_start_time is not None:
+                    duration = time - state_start_time
+                    if current_state not in time_in_states:
+                        time_in_states[current_state] = 0
+                    time_in_states[current_state] += duration
+                
+                # Start new state
+                current_state = state
+                state_start_time = time
+        
+        # Calculate total time in stop states
+        total_stop_time = sum(time_in_states.get(stop_state, 0) for stop_state in stop_states)
+        stop_percentage = total_stop_time / total_time if total_time > 0 else 0
+        
+        # Store statistics
+        larva_stats[larva_id] = {
+            'total_tracked_time': total_time,
+            'time_in_stop': total_stop_time,
+            'stop_percentage': stop_percentage
+        }
+        
+        # Flag larvae with excessive stop time
+        if stop_percentage > max_stop_percentage:
+            larvae_to_remove.append(larva_id)
+    
+    # Remove flagged larvae
+    for larva_id in larvae_to_remove:
+        if larva_id in extracted_data:
+            del extracted_data[larva_id]
+    
+    # Update metadata if necessary
+    if is_multi_exp and 'metadata' in filtered_data:
+        filtered_data['metadata'].update({
+            'total_larvae': len(extracted_data),
+            'larvae_removed_excess_stop': len(larvae_to_remove),
+            'max_stop_percentage': max_stop_percentage
+        })
+    
+    # Print filtering results
+    print(f"Excess stop time filtering results (threshold: {max_stop_percentage*100:.0f}%):")
+    print(f"  - Removed {len(larvae_to_remove)} larvae with >{int(max_stop_percentage*100)}% time in stop state")
+    print(f"  - {len(extracted_data)} larvae remaining")
+    
+    return filtered_data, larva_stats
+
 def analyze_behavior_durations(data, show_plot=True, title=None):
     """Analyze behavior durations from processed trx data with separate analysis for large, small, and total behaviors.
     
@@ -88,6 +192,7 @@ def analyze_behavior_durations(data, show_plot=True, title=None):
     # Define behavior mappings for large_small arrays
     # Even indices (0, 2, 4, 6, 8, 10) are large behaviors
     # Odd indices (1, 3, 5, 7, 9, 11) are small behaviors
+    
     behavior_mapping = {
         0: ('large_run', 'run'),
         1: ('small_run', 'run'),
@@ -548,7 +653,7 @@ def analyze_behavior_durations(data, show_plot=True, title=None):
     
     return behavior_stats
 
-def plot_behavior_duration_histograms(data, show_plot=True, title=None, 
+def plot_behavior_duration_histograms(data, show_plot=True, using_frames = True, title=None, 
                                      bin_width=None, max_value=None, log_scale=False,
                                      save_path=None):
     """Plot histograms of behavior durations.
@@ -563,7 +668,7 @@ def plot_behavior_duration_histograms(data, show_plot=True, title=None,
         save_path: Path to save the figure (default: None)
         
     Returns:
-        dict: Statistics and histogram data for each behavior type
+        dict: Statistics and histogram data for each behavior type, including indices of behaviors above mean and median
     """
     import numpy as np
     import matplotlib.pyplot as plt
@@ -638,34 +743,38 @@ def plot_behavior_duration_histograms(data, show_plot=True, title=None,
     for idx, (behavior_key, _) in behavior_mapping.items():
         behavior_stats[behavior_key] = {
             'durations': [],
+            'duration_indices': [],  # Track larva_id and action indices
             'n_actions': 0,
             'total_duration': 0,
             'mean_duration': 0,
             'median_duration': 0,
             'std_duration': 0,
             'percent_of_total': 0,
-            'histogram_data': None
+            'histogram_data': None,
+            'above_mean_indices': [],  # Will store indices of behaviors above mean
+            'above_median_indices': []  # Will store indices of behaviors above median
         }
     
     # Initialize total behaviors (combined large and small)
     for base_name in base_behavior_colors:
         behavior_stats[f"{base_name}_total"] = {
             'durations': [],
+            'duration_indices': [],  # Track larva_id and action indices
             'n_actions': 0,
             'total_duration': 0,
             'mean_duration': 0,
             'median_duration': 0,
             'std_duration': 0,
             'percent_of_total': 0,
-            'histogram_data': None
+            'histogram_data': None,
+            'above_mean_indices': [],  # Will store indices of behaviors above mean
+            'above_median_indices': []  # Will store indices of behaviors above median
         }
     
     # Process each larva
     total_actions = {'large': 0, 'small': 0, 'total': 0}
     
     # Determine if we're using frames (n_duration_large_small) or seconds (duration_large_small)
-    sample_larva = next(iter(extracted_data.values()))
-    using_frames = 'n_duration_large_small' in sample_larva
     duration_key = 'n_duration_large_small' if using_frames else 'duration_large_small'
     
     # Set appropriate bin width based on units
@@ -709,12 +818,19 @@ def plot_behavior_duration_histograms(data, show_plot=True, title=None,
             if durations is not None and n_actions is not None:
                 # Clean data - remove NaN values
                 n = int(np.nansum(n_actions.flatten()))
-                clean_durations = durations.flatten()[~np.isnan(durations.flatten())]
+                
+                # Get non-NaN indices and values
+                valid_indices = ~np.isnan(durations.flatten())
+                clean_durations = durations.flatten()[valid_indices]
                 
                 if n > 0 and len(clean_durations) > 0:
                     # Add to behavior stats
                     behavior_stats[behavior_key]['n_actions'] += n
                     behavior_stats[behavior_key]['durations'].extend(clean_durations)
+                    
+                    # Store indices information as (larva_id, action_index, duration)
+                    for i, duration in enumerate(clean_durations):
+                        behavior_stats[behavior_key]['duration_indices'].append((larva_id, i, duration))
                     
                     # Update action counts by size
                     total_actions[size_group] += n
@@ -723,11 +839,16 @@ def plot_behavior_duration_histograms(data, show_plot=True, title=None,
                     # Also add to total behavior type
                     total_key = f"{base_name}_total"
                     behavior_stats[total_key]['durations'].extend(clean_durations)
+                    
+                    # Store indices information for totals too
+                    for i, duration in enumerate(clean_durations):
+                        behavior_stats[total_key]['duration_indices'].append((larva_id, i, duration))
     
     # Calculate statistics for each behavior
     for behavior in behavior_stats:
         stats = behavior_stats[behavior]
         durations = stats['durations']
+        duration_indices = stats['duration_indices']
         
         if durations:
             # Determine the behavior group
@@ -748,18 +869,34 @@ def plot_behavior_duration_histograms(data, show_plot=True, title=None,
                                          behavior_stats[small_key]['n_actions'])
             
             # Calculate statistics
+            mean_duration = float(np.mean(durations))
+            median_duration = float(np.median(durations))
             stats.update({
                 'total_duration': float(np.sum(durations)),
-                'mean_duration': float(np.mean(durations)),
-                'median_duration': float(np.median(durations)),
+                'mean_duration': mean_duration,
+                'median_duration': median_duration,
                 'std_duration': float(np.std(durations)),
                 'percent_of_total': 100 * stats['n_actions'] / group_total if group_total > 0 else 0
             })
-    
+            
+            # Find indices of behaviors above mean
+            above_mean_indices = []
+            for larva_id, action_idx, duration in duration_indices:
+                if duration > mean_duration:
+                    above_mean_indices.append((larva_id, action_idx))
+            
+            stats['above_mean_indices'] = above_mean_indices
+            
+            # Find indices of behaviors above median
+            above_median_indices = []
+            for larva_id, action_idx, duration in duration_indices:
+                if duration > median_duration:
+                    above_median_indices.append((larva_id, action_idx))
+            
+            stats['above_median_indices'] = above_median_indices
+    base_behavior_names = ['run', 'cast', 'stop', 'hunch', 'backup', 'roll']
     if show_plot:
-        # Define the base behavior types to plot
-        base_behavior_names = ['run', 'cast', 'stop', 'hunch', 'backup', 'roll']
-        
+        # Define the base behavior types to plot        
         # Filter to only include behaviors with data
         active_behavior_types = []
         for base_name in base_behavior_names:
@@ -940,8 +1077,8 @@ def plot_behavior_duration_histograms(data, show_plot=True, title=None,
             print(f"\n{group_name} duration analysis ({unit_label}) for {title}")
             print(f"Number of larvae: {n_larvae}")
             print(f"Total actions: {group_total_actions}\n")
-            print(f"{'Behavior':>12} {'Events':>8} {'%Total':>7} {'Mean':>10} {'Median':>10} {'Std':>10}")
-            print("-" * 70)
+            print(f"{'Behavior':>12} {'Events':>8} {'%Total':>7} {'Mean':>10} {'Median':>10} {'Std':>10} {'Above Mean':>10} {'Above Med':>10}")
+            print("-" * 95)
             
             for behavior in behaviors:
                 stats = behavior_stats[behavior]
@@ -952,10 +1089,363 @@ def plot_behavior_duration_histograms(data, show_plot=True, title=None,
                     else:
                         display_name = behavior.replace(prefix, '')
                     
+                    above_mean_count = len(stats['above_mean_indices'])
+                    above_median_count = len(stats['above_median_indices'])
+                    
                     print(f"{display_name:>12}: {stats['n_actions']:8d} {stats['percent_of_total']:6.1f}%"
-                          f"{stats['mean_duration']:10.2f} {stats['median_duration']:10.2f} {stats['std_duration']:10.2f}")
+                          f"{stats['mean_duration']:10.2f} {stats['median_duration']:10.2f} {stats['std_duration']:10.2f}"
+                          f"{above_mean_count:10d} {above_median_count:10d}")
     
     return behavior_stats
+ 
+def merge_short_stop_sequences(data, behavior_stats, using_frames=True, min_stop_duration_cast=2.0, min_stop_duration_run=3.0):
+    """
+    Merge sequences with short stops according to the following rules:
+    1. Cast→short_stop→cast: Merge into a single cast
+    2. Run→short_stop→run: Merge into a single run
+    3. Run→short_stop→cast or cast→short_stop→run: Merge stop with the longer adjacent behavior
+    
+    Args:
+        data: Either single experiment data (dict) or all experiments data (dict with 'data' key)
+        behavior_stats: Statistics returned from plot_behavior_duration_histograms
+        using_frames: Whether durations are in frames (True) or seconds (False)
+        min_stop_duration_cast: Minimum duration (in seconds) for stops between casts
+        min_stop_duration_run: Minimum duration (in seconds) for stops between runs
+        
+    Returns:
+        dict: Modified data with merged behaviors
+        dict: Summary of merging operations
+    """
+    import numpy as np
+    import copy
+    
+    # Make a deep copy to avoid modifying original data
+    merged_data = copy.deepcopy(data)
+    
+    # Get mean duration for stops (use the total stops stats)
+    if 'stop_total' in behavior_stats:
+        mean_stop_duration = behavior_stats['stop_total']['mean_duration']
+        # Use the larger of mean duration or specified minimum
+        threshold_cast = min_stop_duration_cast
+        threshold_run = min_stop_duration_run
+    else:
+        print(f"No stop behavior statistics found. Using defaults of {min_stop_duration_cast}s for casts and {min_stop_duration_run}s for runs.")
+        threshold_cast = min_stop_duration_cast
+        threshold_run = min_stop_duration_run
+    
+    # Handle data structure
+    if 'data' in data:
+        extracted_data = merged_data['data']
+    else:
+        extracted_data = merged_data
+    
+    # Track merging statistics
+    merge_summary = {
+        "cast_stop_cast_count": 0,
+        "run_stop_run_count": 0,
+        "mixed_count": 0,
+        "merged_sequences": [],
+        "total_duration_saved": 0
+    }
+    
+    # Process each larva
+    for larva_id, larva_data in extracted_data.items():
+        # Check if we have the necessary data
+        if 'global_state_large_state' not in larva_data or 't' not in larva_data:
+            continue
+            
+        # Get the time and state data
+        states = np.array(larva_data['global_state_large_state']).flatten()
+        times = np.array(larva_data['t']).flatten()
+        
+        # Find continuous segments of behavior
+        segments = []
+        current_state = None
+        start_idx = 0
+        
+        for i, state in enumerate(states):
+            if state != current_state:
+                # Record the previous segment if there was one
+                if current_state is not None and i > start_idx:
+                    segments.append({
+                        'state': current_state,
+                        'start_idx': start_idx,
+                        'end_idx': i - 1,
+                        'duration': times[i - 1] - times[start_idx]
+                    })
+                current_state = state
+                start_idx = i
+        
+        # Add the final segment
+        if current_state is not None and len(states) > start_idx:
+            segments.append({
+                'state': current_state,
+                'start_idx': start_idx,
+                'end_idx': len(states) - 1,
+                'duration': times[-1] - times[start_idx]
+            })
+        
+        # Look for patterns with short stops
+        i = 0
+        new_states = np.copy(states)
+        
+        while i < len(segments) - 2:
+            # Map segment states to behavior names
+            state1 = segments[i]['state']
+            state2 = segments[i+1]['state']
+            state3 = segments[i+2]['state']
+            
+            # Get durations
+            duration1 = segments[i]['duration']
+            duration2 = segments[i+1]['duration']  # Stop duration
+            duration3 = segments[i+2]['duration']
+            
+            # Check different patterns
+            is_cast1 = state1 in [2, 1.5]  # large_cast or small_cast
+            is_run1 = state1 in [1, 0.5]   # large_run or small_run
+            is_stop = state2 in [3, 2.5]   # large_stop or small_stop
+            is_cast3 = state3 in [2, 1.5]  # large_cast or small_cast
+            is_run3 = state3 in [1, 0.5]   # large_run or small_run
+            
+            # Pattern 1: Cast → short stop → cast
+            if is_cast1 and is_stop and is_cast3 and duration2 < threshold_cast:
+                # Record and merge as cast-stop-cast
+                merge_summary["cast_stop_cast_count"] += 1
+                merge_summary["merged_sequences"].append({
+                    "type": "cast-stop-cast",
+                    "larva_id": larva_id,
+                    "behavior1_duration": duration1,
+                    "stop_duration": duration2,
+                    "behavior3_duration": duration3,
+                    "total_duration": duration1 + duration2 + duration3
+                })
+                merge_summary["total_duration_saved"] += duration2
+                
+                # Convert the stop segment to a cast
+                start_stop = segments[i+1]['start_idx']
+                end_stop = segments[i+1]['end_idx']
+                new_states[start_stop:end_stop+1] = state1  # Use the state of the first cast
+                
+                # Skip ahead
+                i += 3
+                continue
+                
+            # Pattern 2: Run → short stop → run
+            elif is_run1 and is_stop and is_run3 and duration2 < threshold_run:
+                # Record and merge as run-stop-run
+                merge_summary["run_stop_run_count"] += 1
+                merge_summary["merged_sequences"].append({
+                    "type": "run-stop-run",
+                    "larva_id": larva_id,
+                    "behavior1_duration": duration1,
+                    "stop_duration": duration2,
+                    "behavior3_duration": duration3,
+                    "total_duration": duration1 + duration2 + duration3
+                })
+                merge_summary["total_duration_saved"] += duration2
+                
+                # Convert the stop segment to a run
+                start_stop = segments[i+1]['start_idx']
+                end_stop = segments[i+1]['end_idx']
+                new_states[start_stop:end_stop+1] = state1  # Use the state of the first run
+                
+                # Skip ahead
+                i += 3
+                continue
+                
+            # Pattern 3: Mixed (run → short stop → cast OR cast → short stop → run)
+            elif ((is_run1 and is_stop and is_cast3) or (is_cast1 and is_stop and is_run3)) and duration2 < threshold_cast:
+                # Determine which behavior has longer duration
+                if duration1 >= duration3:
+                    # Use the first behavior (preceding the stop)
+                    target_state = state1
+                    longer_type = "preceding" + ("_run" if is_run1 else "_cast")
+                else:
+                    # Use the third behavior (following the stop)
+                    target_state = state3
+                    longer_type = "following" + ("_run" if is_run3 else "_cast")
+                
+                # Record and merge as mixed
+                merge_summary["mixed_count"] += 1
+                merge_summary["merged_sequences"].append({
+                    "type": "mixed",
+                    "longer": longer_type,
+                    "larva_id": larva_id,
+                    "behavior1_duration": duration1,
+                    "stop_duration": duration2,
+                    "behavior3_duration": duration3,
+                    "total_duration": duration1 + duration2 + duration3
+                })
+                merge_summary["total_duration_saved"] += duration2
+                
+                # Convert the stop segment to the longer behavior
+                start_stop = segments[i+1]['start_idx']
+                end_stop = segments[i+1]['end_idx']
+                new_states[start_stop:end_stop+1] = target_state
+                
+                # Skip ahead
+                i += 3
+                continue
+            
+            # Move to next segment if no merge happened
+            i += 1
+        
+        # Update the modified states back to the larva data
+        larva_data['global_state_large_state'] = new_states
+    
+    # Print summary statistics
+    total_merged = merge_summary["cast_stop_cast_count"] + merge_summary["run_stop_run_count"] + merge_summary["mixed_count"]
+    print(f"Merged {total_merged} sequences with short stops:")
+    print(f"  - {merge_summary['cast_stop_cast_count']} cast-stop-cast sequences")
+    print(f"  - {merge_summary['run_stop_run_count']} run-stop-run sequences") 
+    print(f"  - {merge_summary['mixed_count']} mixed sequences (run-stop-cast or cast-stop-run)")
+    print(f"Total duration saved: {merge_summary['total_duration_saved']:.2f} {'frames' if using_frames else 'seconds'}")
+    
+    return merged_data, merge_summary
+
+def plot_behavior_merge_differences(original_data, merged_data, larva_id=None, time_window=None):
+    """
+    Create a comparison visualization that shows where cast-stop-cast sequences
+    were merged in the behavior data.
+    
+    Args:
+        original_data: The original unmodified behavior data
+        merged_data: The data after merging cast-stop-cast sequences
+        larva_id: Optional specific larva ID to visualize (if None, will use first available)
+        time_window: Optional [start_time, end_time] to zoom in on a specific section
+        
+    Returns:
+        fig: The matplotlib figure object
+    """
+    from matplotlib.colors import ListedColormap
+    
+    # If no larva_id is provided, use the first one
+    if larva_id is None:
+        larva_id = next(iter(original_data.keys()))
+    
+    # Get state data for the selected larva from both datasets
+    orig_states = np.array(original_data[larva_id]['global_state_large_state']).flatten()
+    merged_states = np.array(merged_data[larva_id]['global_state_large_state']).flatten()
+    times = np.array(original_data[larva_id]['t']).flatten()
+    
+    # Create a difference array (where states were changed)
+    diff_states = np.zeros_like(orig_states)
+    diff_states[(orig_states != merged_states)] = 1  # Mark changed positions
+    
+    # Apply time window if provided
+    if time_window is not None:
+        start_idx = np.searchsorted(times, time_window[0])
+        end_idx = np.searchsorted(times, time_window[1])
+        orig_states = orig_states[start_idx:end_idx]
+        merged_states = merged_states[start_idx:end_idx]
+        diff_states = diff_states[start_idx:end_idx]
+        times = times[start_idx:end_idx]
+    
+    # Create a figure with 3 subplots
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 9), sharex=True)
+    
+    # Define colormap for the behavior states
+    behavior_colors = {
+        0: 'white',      # No behavior
+        1: [0.0, 0.0, 0.0],  # large_run (Black)
+        2: [1.0, 0.0, 0.0],  # large_cast (Red)
+        3: [0.0, 1.0, 0.0],  # large_stop (Green)
+        4: [0.0, 0.0, 1.0],  # large_hunch (Blue)
+        5: [1.0, 0.5, 0.0],  # large_backup (Orange)
+        6: [0.5, 0.0, 0.5],  # large_roll (Purple)
+        0.5: [0.7, 0.7, 0.7],  # small_run (Light gray)
+        1.5: [1.0, 0.7, 0.7],  # small_cast (Light red)
+        2.5: [0.7, 1.0, 0.7],  # small_stop (Light green)
+        3.5: [0.7, 0.7, 1.0],  # small_hunch (Light blue)
+        4.5: [1.0, 0.8, 0.6],  # small_backup (Light orange)
+        5.5: [0.8, 0.6, 0.8]   # small_roll (Light purple)
+    }
+    
+    # Create list of colors for the colormap
+    unique_states = sorted(list(set(np.concatenate([orig_states, merged_states]))))
+    color_list = [behavior_colors[state] if state in behavior_colors else 'gray' for state in unique_states]
+    
+    # Create behavior colormap
+    behavior_cmap = ListedColormap(color_list)
+    
+    # Plot original state data
+    ax1.imshow(orig_states.reshape(1, -1), aspect='auto', cmap=behavior_cmap)
+    ax1.set_yticks([])
+    ax1.set_title(f"Original Behavior (Larva {larva_id})")
+    
+    # Plot merged state data
+    ax2.imshow(merged_states.reshape(1, -1), aspect='auto', cmap=behavior_cmap)
+    ax2.set_yticks([])
+    ax2.set_title(f"Merged Behavior (Larva {larva_id})")
+    
+    # Plot difference (highlighting changed areas)
+    diff_cmap = ListedColormap(['white', 'red'])
+    ax3.imshow(diff_states.reshape(1, -1), aspect='auto', cmap=diff_cmap)
+    ax3.set_yticks([])
+    ax3.set_title("Differences (Red = Changed)")
+    
+    # Add x-axis label
+    ax3.set_xlabel("Time (s)")
+    
+    # Add time ticks
+    if len(times) > 20:
+        # Add fewer time markers for readability
+        step = max(len(times) // 10, 1)
+        ax3.set_xticks(np.arange(0, len(times), step))
+        ax3.set_xticklabels([f"{times[i]:.1f}" for i in range(0, len(times), step)], rotation=45)
+    else:
+        ax3.set_xticks(np.arange(len(times)))
+        ax3.set_xticklabels([f"{t:.1f}" for t in times], rotation=90)
+    
+    # Add a legend for the behavior states
+    behavior_names = {
+        0: 'None',
+        1: 'large_run',
+        2: 'large_cast',
+        3: 'large_stop',
+        4: 'large_hunch',
+        5: 'large_backup',
+        6: 'large_roll',
+        0.5: 'small_run',
+        1.5: 'small_cast',
+        2.5: 'small_stop',
+        3.5: 'small_hunch',
+        4.5: 'small_backup',
+        5.5: 'small_roll'
+    }
+    
+    # Create legend patches
+    patches = []
+    for state in unique_states:
+        if state in behavior_names:
+            color = behavior_colors[state]
+            patches.append(plt.Rectangle((0, 0), 1, 1, fc=color, 
+                                        label=behavior_names[state]))
+    
+    # Add the legend to the figure
+    fig.legend(handles=patches, loc='center right', bbox_to_anchor=(1.15, 0.5))
+    
+    plt.tight_layout()
+    plt.subplots_adjust(right=0.85)  # Make room for the legend
+    
+    # Print some statistics about the changes
+    n_changes = np.sum(diff_states)
+    pct_changes = (n_changes / len(diff_states)) * 100
+    print(f"Total time points changed: {n_changes} ({pct_changes:.2f}%)")
+    
+    # Count cast-stop-cast sequences that were merged
+    csc_patterns = 0
+    for i in range(1, len(orig_states)-1):
+        # Check for cast → stop → cast pattern that was changed
+        if (orig_states[i] in [3, 2.5] and            # stop in middle
+            merged_states[i] in [2, 1.5] and          # now a cast
+            orig_states[i-1] in [2, 1.5] and          # cast before
+            orig_states[i+1] in [2, 1.5]):            # cast after
+            csc_patterns += 1
+    
+    print(f"Cast-stop-cast sequences identified in this view: {csc_patterns}")
+    
+    return fig
 
 
 def plot_global_behavior_matrix(trx_data, show_separate_totals=True):
@@ -1167,24 +1657,164 @@ def plot_global_behavior_matrix(trx_data, show_separate_totals=True):
     
     return behavior_matrix
 
-def plot_behavior_matrices_for_all_dates(base_path, show_separate_totals=False, min_duration=300,
-                                         fig_size=(15, 10), max_dates=None):
+def _create_behavior_matrix(trx_data, show_separate_totals=True):
     """
-    Process all trx.mat files in date subfolders and create a grid of behavior matrices.
+    Create a behavior matrix for visualization without displaying it.
+    
+    Args:
+        trx_data: Dictionary with larva tracking data
+        show_separate_totals: If True, show large, small, and total behaviors as separate rows
+        
+    Returns:
+        numpy.ndarray: The behavior matrix
+        tuple: The extent (left, right, bottom, top) for imshow
+    """
+    import numpy as np
+    
+    # Define the base behavior names
+    base_behavior_names = {
+        1.0: 'run', 
+        2.0: 'cast', 
+        3.0: 'stop'
+    }
+    
+    # Get larvae IDs
+    if isinstance(trx_data, dict) and 'data' in trx_data:
+        # Handle nested data structure (likely from multi-experiment data)
+        larvae_data = trx_data['data']
+    else:
+        # Direct data structure
+        larvae_data = trx_data
+        
+    larva_ids = sorted(larvae_data.keys())
+    n_larvae = len(larva_ids)
+    
+    if n_larvae == 0:
+        return np.zeros((1, 1)), (0, 1, 0, 1)
+    
+    # Compute time range - with better error handling
+    tmins = []
+    tmaxs = []
+    for lid in larva_ids:
+        if 't' in larvae_data[lid] and len(larvae_data[lid]['t']) > 0:
+            # Convert to numpy array if it's not already and flatten
+            times = np.array(larvae_data[lid]['t']).flatten()
+            if len(times) > 0:
+                tmins.append(np.min(times))
+                tmaxs.append(np.max(times))
+    
+    if not tmins or not tmaxs:
+        return np.zeros((1, 1)), (0, 1, 0, 1)
+        
+    t_min = min(tmins)
+    t_max = max(tmaxs)
+    
+    # Create a time grid (100 points is reasonable for visualization)
+    n_time_points = 100
+    time_grid = np.linspace(t_min, t_max, n_time_points)
+    
+    # Initialize behavior matrix
+    rows_per_larva = 3 if show_separate_totals else 1
+    behavior_matrix = np.zeros((n_larvae * rows_per_larva, n_time_points))
+    
+    # Fill in the behavior matrix
+    for i, larva_id in enumerate(larva_ids):
+        if 'global_state_large_state' not in larvae_data[larva_id] or 't' not in larvae_data[larva_id]:
+            continue  # Skip larvae without required data
+        
+        try:
+            # Convert both times and behaviors to flat numpy arrays
+            times = np.array(larvae_data[larva_id]['t']).flatten()
+            behaviors = np.array(larvae_data[larva_id]['global_state_large_state']).flatten()
+            
+            # Check if times are sorted (required for np.interp)
+            if not np.all(np.diff(times) >= 0):
+                # Sort times and behaviors if times are not monotonically increasing
+                sorted_indices = np.argsort(times)
+                times = times[sorted_indices]
+                behaviors = behaviors[sorted_indices]
+            
+            # Ensure both arrays have the same length
+            min_len = min(len(times), len(behaviors))
+            if min_len == 0:
+                continue  # Skip if either array is empty
+            
+            times = times[:min_len]
+            behaviors = behaviors[:min_len]
+            
+            # Interpolate behaviors to the time grid
+            interp_behaviors = np.interp(time_grid, times, behaviors)
+            
+            if show_separate_totals:
+                # Row 0: Large behaviors (run=1.0, cast=2.0, stop=3.0)
+                # Row 1: Small behaviors (run=1.5, cast=2.5, stop=3.5) - not used here
+                # Row 2: All behaviors combined
+                row_idx = i * 3
+                behavior_matrix[row_idx] = interp_behaviors
+                behavior_matrix[row_idx + 2] = interp_behaviors  # Combined
+            else:
+                # Just one row per larva
+                behavior_matrix[i] = interp_behaviors
+                
+        except Exception as e:
+            print(f"Error processing larva {larva_id}: {str(e)}")
+            # Skip this larva and continue with others
+            continue
+    
+    # Return the matrix and the extent for imshow
+    extent = (t_min, t_max, n_larvae * rows_per_larva, 0)
+    return behavior_matrix, extent
+
+def plot_behavior_matrices_for_all_dates(base_path, show_separate_totals=False, min_duration=300,
+                                         max_stop_percentage=0.4, min_stop_duration_cast=3.0,
+                                         min_stop_duration_run=3.0, fig_size=(15, 10), max_dates=None,
+                                         save_path=None):
+    """
+    Process all trx.mat files in date subfolders, filter, merge stops, and create a grid of behavior matrices.
     
     Args:
         base_path: Base directory containing date subfolders with trx.mat files
         show_separate_totals: If True, show large, small, and total behaviors as separate rows
         min_duration: Minimum duration (in seconds) for filtering larvae
+        max_stop_percentage: Maximum percentage of time a larva can spend in stop state (0.0-1.0)
+        min_stop_duration_cast: Minimum duration for stops between casts to be merged
+        min_stop_duration_run: Minimum duration for stops between runs to be merged
         fig_size: Size of the figure (width, height)
         max_dates: Maximum number of dates to process (None for all)
+        save_path: Path to save the figure (None for no saving)
+        
+    Returns:
+        dict: Dictionary mapping date names to their merged datasets
+        fig: The matplotlib figure
     """
     import os
     import numpy as np
     import matplotlib.pyplot as plt
     from matplotlib.gridspec import GridSpec
+    from matplotlib.colors import ListedColormap, BoundaryNorm
     import src.data_loader as data_loader
     import src.processor as processor
+    import traceback
+    
+    # Define behavior state color scheme
+    state_colors = {
+        0.0: [1.0, 1.0, 1.0],      # White/Background
+        1.0: [0.0, 0.0, 0.0],      # Black (for Run/Crawl)
+        2.0: [1.0, 0.0, 0.0],      # Red (for Cast/Bend)
+        3.0: [0.0, 1.0, 0.0],      # Green (for Stop)
+        4.0: [0.0, 0.0, 1.0],      # Blue (for Hunch)
+        5.0: [1.0, 0.5, 0.0],      # Orange (for Backup)
+        6.0: [0.5, 0.0, 0.5],      # Purple (for Roll)
+        0.5: [0.7, 0.7, 0.7],      # Light gray (for small Run)
+        1.5: [1.0, 0.7, 0.7],      # Light red (for small Cast)
+        2.5: [0.7, 1.0, 0.7],      # Light green (for small Stop)
+        3.5: [0.7, 0.7, 1.0],      # Light blue (for small Hunch)
+        4.5: [1.0, 0.8, 0.6],      # Light orange (for small Backup)
+        5.5: [0.8, 0.6, 0.8]       # Light purple (for small Roll)
+    }
+    
+    # Store merged data for all dates
+    all_merged_data = {}
     
     # Find all trx.mat files in the base path
     all_trx_paths = []
@@ -1203,7 +1833,7 @@ def plot_behavior_matrices_for_all_dates(base_path, show_separate_totals=False, 
     n_dates = len(all_trx_paths)
     if n_dates == 0:
         print("No trx.mat files found!")
-        return
+        return {}, None
     
     # Calculate a reasonable grid layout
     n_cols = min(3, n_dates)  # Maximum 3 columns
@@ -1215,7 +1845,7 @@ def plot_behavior_matrices_for_all_dates(base_path, show_separate_totals=False, 
     
     # Process each date and create a subplot
     for i, (date_name, trx_path) in enumerate(all_trx_paths):
-        print(date_name)
+        print(f"\nProcessing {date_name}")
         row = i // n_cols
         col = i % n_cols
         
@@ -1223,246 +1853,310 @@ def plot_behavior_matrices_for_all_dates(base_path, show_separate_totals=False, 
         ax = fig.add_subplot(gs[row, col])
         
         try:
-            print(f"Processing {trx_path}")
-            
-            # Process the data using your data_loader functions
+            # Process the data using data_loader functions
             date_str, extracted_data, metadata = data_loader.process_single_file(trx_path)
             
-            # Filter the data
+            # Step 1: Filter by duration
             filtered_data = processor.filter_larvae_by_duration(extracted_data, min_total_duration=min_duration)
+            n_after_duration = len(filtered_data)
+            print(f"  - After duration filtering: {n_after_duration} larvae")
             
-            # Get number of larvae after filtering
-            n_larvae = len(filtered_data)
+            # Step 2: Filter by excess stop time
+            filtered_data, stop_time_stats = processor.filter_larvae_by_excess_stop_time(
+                filtered_data, max_stop_percentage=max_stop_percentage
+            )
+            n_after_stop = len(filtered_data)
+            print(f"  - After stop percentage filtering: {n_after_stop} larvae")
+            
+            # Step 3: Calculate behavior statistics for merging
+            behavior_stats = processor.plot_behavior_duration_histograms(
+                filtered_data, show_plot=False, using_frames=False
+            )
+            
+            # Step 4: Merge short stop sequences
+            merged_data, merge_summary = processor.merge_short_stop_sequences(
+                filtered_data, behavior_stats,
+                min_stop_duration_cast=min_stop_duration_cast,
+                min_stop_duration_run=min_stop_duration_run
+            )
+            
+            print(f"  - Merged {merge_summary['cast_stop_cast_count']} cast-stop-cast sequences")
+            print(f"  - Merged {merge_summary['run_stop_run_count']} run-stop-run sequences")
+            
+            # Store the merged data for this date
+            all_merged_data[date_name] = merged_data
+            
+            # Get number of larvae after all processing
+            n_larvae = len(merged_data)
             
             if n_larvae > 0:
-                # Create a modified version of plot_global_behavior_matrix that doesn't show the plot
-                # but returns the behavior matrix and other plotting elements
-                behavior_matrix, extent = _create_behavior_matrix(filtered_data, show_separate_totals)
-                
-                # Show the matrix in this subplot
-                ax.imshow(behavior_matrix, aspect='auto', interpolation='nearest', 
-                         alpha=0.8, extent=extent)
-                
-                # Set title and labels
-                ax.set_title(f"{date_name} (n={n_larvae})", fontsize=10)
-                
-                # Only add x and y labels on the outer edges of the grid
-                if row == n_rows - 1:  # Bottom row
-                    ax.set_xlabel('Time (s)', fontsize=8)
-                else:
-                    ax.set_xticklabels([])
-                
-                if col == 0:  # Leftmost column
-                    ax.set_ylabel('Larvae', fontsize=8)
-                else:
-                    ax.set_yticklabels([])
-                
-                # Minimize ticks for cleaner appearance
-                ax.tick_params(axis='both', which='major', labelsize=6)
+                try:
+                    # Create behavior matrix using the merged data and our fixed helper
+                    behavior_matrix, extent = _create_behavior_matrix(merged_data, show_separate_totals)
+                    
+                    # Create a proper colormap for behavior states
+                    # First identify all unique states in the matrix
+                    unique_states = np.unique(behavior_matrix)
+                    
+                    # Create color list and bounds for behavior states
+                    color_list = []
+                    bounds = []
+                    
+                    for state in sorted(unique_states):
+                        bounds.append(state - 0.1)  # Lower bound
+                        if state in state_colors:
+                            color_list.append(state_colors[state])
+                        else:
+                            # Use white for unknown states
+                            color_list.append([1, 1, 1])
+                    
+                    # Add upper bound for last state
+                    bounds.append(sorted(unique_states)[-1] + 0.1)
+                    
+                    # Create colormap and norm
+                    cmap = ListedColormap(color_list)
+                    norm = BoundaryNorm(bounds, cmap.N)
+                    
+                    # Show the matrix with our custom colormap
+                    ax.imshow(behavior_matrix, aspect='auto', interpolation='nearest', 
+                             alpha=0.8, extent=extent, cmap=cmap, norm=norm)
+                    
+                    # Set title and labels
+                    ax.set_title(f"{date_name} (n={n_larvae})", fontsize=10)
+                    
+                    # Only add x and y labels on the outer edges of the grid
+                    if row == n_rows - 1:  # Bottom row
+                        ax.set_xlabel('Time (s)', fontsize=8)
+                    else:
+                        ax.set_xticklabels([])
+                    
+                    if col == 0:  # Leftmost column
+                        ax.set_ylabel('Larvae', fontsize=8)
+                    else:
+                        ax.set_yticklabels([])
+                    
+                    # Minimize ticks for cleaner appearance
+                    ax.tick_params(axis='both', which='major', labelsize=6)
+                except Exception as inner_e:
+                    print(f"Error creating behavior matrix for {date_name}: {str(inner_e)}")
+                    traceback.print_exc()  # Print the full traceback
+                    ax.text(0.5, 0.5, f"Error creating\nbehavior matrix", 
+                           ha='center', va='center', transform=ax.transAxes, color='red')
             else:
                 ax.text(0.5, 0.5, f"No data for {date_name}\nafter filtering", 
                        ha='center', va='center', transform=ax.transAxes)
         
         except Exception as e:
             print(f"Error processing {trx_path}: {str(e)}")
+            traceback.print_exc()  # Print full traceback for debugging
             ax.text(0.5, 0.5, f"Error processing\n{date_name}", 
                    ha='center', va='center', transform=ax.transAxes, color='red')
     
-    # Create a common legend in a separate subplot
+    # If there's enough data for a decent plot, add a color legend
     if n_dates > 0:
-        legend_ax = fig.add_subplot(gs[n_rows-1, n_cols-1])
-        _add_behavior_legend(legend_ax, show_separate_totals)
+        # Create color legend patches for the most common behavior states
+        from matplotlib.patches import Patch
+        
+        behavior_labels = {
+            1.0: 'Run/Crawl',
+            2.0: 'Cast/Bend',
+            3.0: 'Stop',
+            4.0: 'Hunch',
+            5.0: 'Backup',
+            6.0: 'Roll',
+            0.5: 'Small Run',
+            1.5: 'Small Cast',
+            2.5: 'Small Stop'
+        }
+        
+        legend_elements = []
+        for state, label in behavior_labels.items():
+            if state in state_colors:
+                legend_elements.append(
+                    Patch(facecolor=state_colors[state], alpha=0.8, 
+                         edgecolor='none', label=label)
+                )
+        
+        # Add legend if we have elements
+        if legend_elements:
+            fig.legend(handles=legend_elements, loc='lower center', 
+                     ncol=min(5, len(legend_elements)), 
+                     fontsize=8, bbox_to_anchor=(0.5, 0.01))
     
     fig.suptitle(f"Behavior Matrices - {os.path.basename(base_path)}", fontsize=14)
     plt.tight_layout()
-    plt.subplots_adjust(top=0.92)  # Make room for suptitle
+    plt.subplots_adjust(top=0.92, bottom=0.10)  # Make room for suptitle and legend
+    
+    # Save the figure if a path is provided
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
     plt.show()
-
-# Helper function to create the behavior matrix without showing it
-def _create_behavior_matrix(trx_data, show_separate_totals=False):
-    """Create behavior matrix without plotting - returns matrix and extent."""
+    
+    return all_merged_data, fig
+def plot_global_behavior_matrix_above_mean(trx_data):
+    """
+    Plot global behavior matrix showing only behaviors with durations above the mean.
+    Calculates behavior duration means directly from the data.
+    
+    Args:
+        trx_data: Dictionary containing larva tracking data
+        
+    Returns:
+        numpy.ndarray: The resulting behavior matrix
+    """
+    import copy
     import numpy as np
     
+    # Create a deep copy to avoid modifying original data
+    filtered_data = copy.deepcopy(trx_data)
+    
     # Get sorted larva IDs
-    larva_ids = sorted(trx_data.keys())
-    n_larvae = len(larva_ids)
+    larva_ids = sorted(filtered_data.keys())
     
-    # Compute time range
-    tmins = [np.min(trx_data[lid]['t']) for lid in larva_ids if len(trx_data[lid]['t']) > 0]
-    tmaxs = [np.max(trx_data[lid]['t']) for lid in larva_ids if len(trx_data[lid]['t']) > 0]
-    if not tmins or not tmaxs:
-        raise ValueError("No time data found!")
-    min_time = float(min(tmins))
-    max_time = float(max(tmaxs))
-    
-    resolution = 500  # Reduced for subplots
-    
-    # Define state value mapping (both integer and half-integer values)
-    state_mapping = {
-        # Large behaviors (integer values)
-        1.0: {'name': 'large_run', 'base': 'run', 'color': [0.0, 0.0, 0.0]},      # Black
-        2.0: {'name': 'large_cast', 'base': 'cast', 'color': [1.0, 0.0, 0.0]},     # Red
-        3.0: {'name': 'large_stop', 'base': 'stop', 'color': [0.0, 1.0, 0.0]},     # Green
-        4.0: {'name': 'large_hunch', 'base': 'hunch', 'color': [0.0, 0.0, 1.0]},    # Blue
-        5.0: {'name': 'large_backup', 'base': 'backup', 'color': [1.0, 0.5, 0.0]},   # Orange
-        6.0: {'name': 'large_roll', 'base': 'roll', 'color': [0.5, 0.0, 0.5]},     # Purple
-        
-        # Small behaviors (half-integer values)
-        0.5: {'name': 'small_run', 'base': 'run', 'color': [0.7, 0.7, 0.7]},      # Light gray
-        1.5: {'name': 'small_cast', 'base': 'cast', 'color': [1.0, 0.7, 0.7]},     # Light red
-        2.5: {'name': 'small_stop', 'base': 'stop', 'color': [0.7, 1.0, 0.7]},     # Light green
-        3.5: {'name': 'small_hunch', 'base': 'hunch', 'color': [0.7, 0.7, 1.0]},    # Light blue
-        4.5: {'name': 'small_backup', 'base': 'backup', 'color': [1.0, 0.8, 0.6]},   # Light orange
-        5.5: {'name': 'small_roll', 'base': 'roll', 'color': [0.8, 0.6, 0.8]}      # Light purple
+    # Define state to behavior mapping
+    state_to_behavior = {
+        1: 'large_run',
+        2: 'large_cast',
+        3: 'large_stop',
+        4: 'large_hunch',
+        5: 'large_backup',
+        6: 'large_roll',
+        0.5: 'small_run',
+        1.5: 'small_cast',
+        2.5: 'small_stop',
+        3.5: 'small_hunch',
+        4.5: 'small_backup',
+        5.5: 'small_roll'
     }
     
-    # Define total behavior colors (medium shade between large and small)
-    total_behavior_colors = {
-        'run': [0.4, 0.4, 0.4],       # Medium gray
-        'cast': [0.8, 0.3, 0.3],      # Medium red
-        'stop': [0.3, 0.8, 0.3],      # Medium green
-        'hunch': [0.3, 0.3, 0.8],     # Medium blue
-        'backup': [0.8, 0.6, 0.3],    # Medium orange
-        'roll': [0.6, 0.3, 0.6]       # Medium purple
-    }
-
-    if show_separate_totals:
-        # Create 3 rows per larva: large, small, total
-        behavior_matrix = np.full((n_larvae * 3, resolution, 3), fill_value=1.0)  # white background
-    else:
-        # Create 1 row per larva
-        behavior_matrix = np.full((n_larvae, resolution, 3), fill_value=1.0)  # white background
-
-    # Process each larva
-    for larva_idx, lid in enumerate(larva_ids):
-        # Get time and state data
-        larva_time = np.array(trx_data[lid]['t']).flatten()
+    # First pass: Calculate durations for each behavior type
+    behavior_durations = {behavior: [] for behavior in state_to_behavior.values()}
+    
+    for larva_id in larva_ids:
+        larva_data = filtered_data[larva_id]
         
-        # Use global_state_small_large_state if available, otherwise use global_state_large_state
-        if 'global_state_small_large_state' in trx_data[lid]:
-            states = np.array(trx_data[lid]['global_state_small_large_state']).flatten()
-        else:
-            states = np.array(trx_data[lid]['global_state_large_state']).flatten()
-        
-        # Convert times to indices
-        time_indices = np.floor(
-            ((larva_time - min_time) / (max_time - min_time) * (resolution - 1))
-        ).astype(int)
-        time_indices = np.clip(time_indices, 0, resolution - 1)
-
-        # Arrays to store large, small and total behaviors
-        large_behaviors = np.full((resolution, 3), fill_value=1.0)  # white background
-        small_behaviors = np.full((resolution, 3), fill_value=1.0)  # white background
-        total_behaviors = np.full((resolution, 3), fill_value=1.0)  # white background
-        
-        # For each unique time index, use the corresponding state
-        unique_indices = np.unique(time_indices)
-        for t_idx in unique_indices:
-            mask = time_indices == t_idx
-            if np.any(mask):
-                state_val = float(states[mask][0])  # Take first state if multiple exist
-                
-                # Round to nearest 0.5 to handle potential floating point issues
-                state_val = round(state_val * 2) / 2
-                
-                # Determine if this is a large or small behavior
-                is_large = state_val.is_integer()
-                is_small = not is_large
-                
-                # Assign colors based on state
-                if state_val in state_mapping:
-                    behavior_info = state_mapping[state_val]
-                    
-                    if is_large:
-                        large_behaviors[t_idx] = behavior_info['color']
-                        total_behaviors[t_idx] = total_behavior_colors[behavior_info['base']]
-                    elif is_small:
-                        small_behaviors[t_idx] = behavior_info['color']
-                        total_behaviors[t_idx] = total_behavior_colors[behavior_info['base']]
-                        
-                    # If not showing separate totals, just use the state color directly
-                    if not show_separate_totals:
-                        behavior_matrix[larva_idx, t_idx] = behavior_info['color']
-        
-        # If showing separate totals, assign the arrays to the behavior matrix
-        if show_separate_totals:
-            row_large = larva_idx * 3
-            row_small = larva_idx * 3 + 1
-            row_total = larva_idx * 3 + 2
+        # Check if we have the necessary data
+        if 'global_state_large_state' not in larva_data or 't' not in larva_data:
+            continue
             
-            behavior_matrix[row_large] = large_behaviors
-            behavior_matrix[row_small] = small_behaviors
-            behavior_matrix[row_total] = total_behaviors
-    
-    extent = [min_time, max_time, behavior_matrix.shape[0], 0]
-    return behavior_matrix, extent
-
-# Helper function to add a legend
-def _add_behavior_legend(ax, show_separate_totals=False):
-    """Add a behavioral state legend to the given axis."""
-    from matplotlib.patches import Patch
-    
-    # Define colors for behaviors
-    behavior_colors = {
-        'run_large': [0.0, 0.0, 0.0],
-        'cast_large': [1.0, 0.0, 0.0],
-        'stop_large': [0.0, 1.0, 0.0],
-        'hunch_large': [0.0, 0.0, 1.0],
-        'backup_large': [1.0, 0.5, 0.0],
-        'roll_large': [0.5, 0.0, 0.5],
-        'run_small': [0.7, 0.7, 0.7],
-        'cast_small': [1.0, 0.7, 0.7],
-        'stop_small': [0.7, 1.0, 0.7],
-        'hunch_small': [0.7, 0.7, 1.0],
-        'backup_small': [1.0, 0.8, 0.6],
-        'roll_small': [0.8, 0.6, 0.8],
-        'run_total': [0.4, 0.4, 0.4],
-        'cast_total': [0.8, 0.3, 0.3],
-        'stop_total': [0.3, 0.8, 0.3],
-        'hunch_total': [0.3, 0.3, 0.8],
-        'backup_total': [0.8, 0.6, 0.3],
-        'roll_total': [0.6, 0.3, 0.6]
-    }
-    
-    # Create legend elements
-    legend_elements = []
-    
-    # Add behaviors based on show_separate_totals
-    if show_separate_totals:
-        # Add large behaviors
-        for behavior in ['run', 'cast', 'stop', 'hunch', 'backup', 'roll']:
-            legend_elements.append(
-                Patch(facecolor=behavior_colors[f'{behavior}_large'], 
-                      label=f"{behavior} (large)")
-            )
+        # Get the time and state data
+        states = np.array(larva_data['global_state_large_state']).flatten()
+        times = np.array(larva_data['t']).flatten()
         
-        # Add small behaviors
-        for behavior in ['run', 'cast', 'stop', 'hunch', 'backup', 'roll']:
-            legend_elements.append(
-                Patch(facecolor=behavior_colors[f'{behavior}_small'], 
-                      label=f"{behavior} (small)")
-            )
+        # Find continuous segments of behavior
+        segments = []
+        current_state = None
+        start_idx = 0
         
-        # Add total behaviors
-        for behavior in ['run', 'cast', 'stop', 'hunch', 'backup', 'roll']:
-            legend_elements.append(
-                Patch(facecolor=behavior_colors[f'{behavior}_total'], 
-                      label=f"{behavior} (total)")
-            )
-    else:
-        # Just show all behaviors without large/small/total distinction
-        for behavior in ['run', 'cast', 'stop', 'hunch', 'backup', 'roll']:
-            legend_elements.append(
-                Patch(facecolor=behavior_colors[f'{behavior}_large'], 
-                      label=behavior)
-            )
+        for i, state in enumerate(states):
+            if state != current_state:
+                # Record the previous segment if there was one
+                if current_state is not None and i > start_idx:
+                    segments.append({
+                        'state': current_state,
+                        'start_idx': start_idx,
+                        'end_idx': i - 1,
+                        'duration': times[i - 1] - times[start_idx]  # This is in seconds
+                    })
+                current_state = state
+                start_idx = i
+        
+        # Add the final segment
+        if current_state is not None and len(states) > start_idx:
+            segments.append({
+                'state': current_state,
+                'start_idx': start_idx,
+                'end_idx': len(states) - 1,
+                'duration': times[-1] - times[start_idx]  # This is in seconds
+            })
+        
+        # Collect durations for each behavior type
+        for segment in segments:
+            state = segment['state']
+            if state in state_to_behavior:
+                behavior_key = state_to_behavior[state]
+                behavior_durations[behavior_key].append(segment['duration'])
     
-    # Add "Other" category
-    legend_elements.append(Patch(facecolor=[1, 1, 1], label='Other'))
+    # Calculate mean durations for each behavior type
+    mean_durations = {}
+    for behavior, durations in behavior_durations.items():
+        if durations:  # Only calculate if we have data
+            mean_durations[behavior] = np.nanmedian(durations)
+            print(f"Mean duration for {behavior}: {mean_durations[behavior]:.2f}s")
+        else:
+            mean_durations[behavior] = 0
     
-    # Create the legend
-    ax.legend(handles=legend_elements, loc='center', fontsize='small')
-    ax.axis('off')  # Hide the axis
+    # Second pass: Filter behaviors that are below the mean
+    for larva_id in larva_ids:
+        larva_data = filtered_data[larva_id]
+        
+        # Check if we have the necessary data
+        if 'global_state_large_state' not in larva_data or 't' not in larva_data:
+            continue
+            
+        # Get the time and state data
+        states = np.array(larva_data['global_state_large_state']).flatten()
+        times = np.array(larva_data['t']).flatten()
+        
+        # Create a mask for behaviors to keep
+        keep_mask = np.zeros_like(states, dtype=bool)
+        
+        # Find continuous segments of behavior again
+        segments = []
+        current_state = None
+        start_idx = 0
+        
+        for i, state in enumerate(states):
+            if state != current_state:
+                # Record the previous segment if there was one
+                if current_state is not None and i > start_idx:
+                    segments.append({
+                        'state': current_state,
+                        'start_idx': start_idx,
+                        'end_idx': i - 1,
+                        'duration': times[i - 1] - times[start_idx]
+                    })
+                current_state = state
+                start_idx = i
+        
+        # Add the final segment
+        if current_state is not None and len(states) > start_idx:
+            segments.append({
+                'state': current_state,
+                'start_idx': start_idx,
+                'end_idx': len(states) - 1,
+                'duration': times[-1] - times[start_idx]
+            })
+        
+        # Check each segment against the mean duration
+        for segment in segments:
+            state = segment['state']
+            if state in state_to_behavior:
+                behavior_key = state_to_behavior[state]
+                
+                # Skip if we don't have a mean for this behavior
+                if behavior_key not in mean_durations or mean_durations[behavior_key] == 0:
+                    continue
+                
+                # Keep this segment if duration is above mean
+                if segment['duration'] > mean_durations[behavior_key]:
+                    start = segment['start_idx']
+                    end = segment['end_idx']
+                    keep_mask[start:end+1] = True
+        
+        # Set states we don't want to keep to 0 (which will be white in the plot)
+        filtered_states = np.copy(states)
+        filtered_states[~keep_mask] = 0
+        
+        # Update the filtered data
+        filtered_data[larva_id]['global_state_large_state'] = filtered_states
+    
+    # Use the standard plotting function with our filtered data
+    # Set show_separate_totals=False to show large and small behaviors on same row
+    behavior_matrix = plot_global_behavior_matrix(filtered_data, show_separate_totals=False)
+    
+    return behavior_matrix
 
 
 def plot_behavioral_contour_with_global_trajectory(trx_data, larva_id):

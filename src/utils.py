@@ -1,47 +1,5 @@
 import numpy as np
 
-def get_larva_orientation(larva_data, frame=None):
-    """Calculate larva orientation angle from tail to center.
-    
-    Args:
-        larva_data: Dict containing larva tracking data
-        frame: Optional frame index to get orientation for a specific frame
-        
-    Returns:
-        ndarray: Orientation angles in degrees (-180 to 180)
-    """
-    # Extract coordinates
-    x_center = np.array(larva_data['x_center']).flatten()
-    y_center = np.array(larva_data['y_center']).flatten()
-    
-    # Handle different spine data shapes
-    x_spine = np.array(larva_data['x_spine'])
-    y_spine = np.array(larva_data['y_spine'])
-    
-    if x_spine.ndim > 1:  # 2D array
-        x_tail = x_spine[-1].flatten()
-        y_tail = y_spine[-1].flatten()
-    else:  # 1D array
-        x_tail = x_spine
-        y_tail = y_spine
-    
-    # Calculate direction vector from tail to center
-    dx = x_center - x_tail
-    dy = y_center - y_tail
-    
-    # Convert to angle in degrees (arctan2 returns angles in radians)
-    # -dx to make 0 degrees = wind direction (negative x-axis)
-    angles = np.degrees(np.arctan2(dy, -dx))
-    
-    # If frame is specified, return only that frame's angle
-    if frame is not None:
-        if 0 <= frame < len(angles):
-            return angles[frame]
-        else:
-            return None
-    
-    return angles
-
 def smooth_angles(angles, smooth_window=5, jump_threshold=30):
     """Apply smoothing to angle data with handling for jumps at ±180° boundary.
     
@@ -89,6 +47,47 @@ def circular_diff(a, b):
     diff = a - b
     diff = (diff + 180) % 360 - 180
     return diff
+def get_larva_body_orientation(larva_data, frame=None):
+    """Calculate larva orientation angle from tail to center.
+    
+    Args:
+        larva_data: Dict containing larva tracking data (trx file)
+        frame: Optional frame index to get orientation for a specific frame
+        
+    Returns:
+        ndarray: Orientation angles in degrees (-180 to 180)
+    """
+    # Extract coordinates
+    x_center = np.array(larva_data['x_center']).flatten()
+    y_center = np.array(larva_data['y_center']).flatten()
+    
+    # Handle different spine data shapes
+    x_spine = np.array(larva_data['x_spine'])
+    y_spine = np.array(larva_data['y_spine'])
+    
+    if x_spine.ndim > 1:  # 2D array
+        x_tail = x_spine[-1].flatten()
+        y_tail = y_spine[-1].flatten()
+    else:  # 1D array
+        x_tail = x_spine
+        y_tail = y_spine
+    
+    # Calculate direction vector from tail to center
+    dx = x_center - x_tail
+    dy = y_center - y_tail
+    
+    # Convert to angle in degrees (arctan2 returns angles in radians)
+    # -dx to make 0 degrees = wind direction (negative x-axis)
+    angles = np.degrees(np.arctan2(dy, -dx))
+    
+    # If frame is specified, return only that frame's angle
+    if frame is not None:
+        if 0 <= frame < len(angles):
+            return angles[frame]
+        else:
+            return None
+    
+    return angles
 
 def determine_cast_direction(init_angle, cast_angle):
     """Determine if cast is upstream or downstream based on orientation.
