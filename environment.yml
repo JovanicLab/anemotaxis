@@ -16,6 +16,7 @@ dependencies:
   - ipython  # For notebook support
   - jupyter  # For running notebooks
   - pip
+  - tqdm
   - pip:
     - arrow  # Only essential pip packages kept
 
