@@ -47,7 +47,8 @@ def circular_diff(a, b):
     diff = a - b
     diff = (diff + 180) % 360 - 180
     return diff
-def get_larva_body_orientation(larva_data, frame=None):
+
+def compute_orientation_tail_to_center(larva_data, frame=None):
     """Calculate larva orientation angle from tail to center.
     
     Args:
@@ -89,6 +90,18 @@ def get_larva_body_orientation(larva_data, frame=None):
     
     return angles
 
+def compute_orientation_tail_to_neck(x_tail, y_tail, x_neck, y_neck):
+    """
+    Compute orientation angle between tail-to-neck vector and negative x-axis.
+    Returns angle in degrees, where 0° = facing -x (downstream), ±180° = +x (upstream).
+    """
+    v_x = x_neck - x_tail
+    v_y = y_neck - y_tail
+    angle_rad = np.arctan2(v_y, -v_x)  # -v_x for -x axis
+    angle_deg = np.degrees(angle_rad)
+    angle_deg = (angle_deg + 180) % 360 - 180
+    return angle_deg
+
 def determine_cast_direction(init_angle, cast_angle):
     """Determine if cast is upstream or downstream based on orientation.
     
@@ -114,3 +127,5 @@ def determine_cast_direction(init_angle, cast_angle):
         return 'upstream' if abs(angle_diff) < 90 else 'downstream'
     else:  # Facing partially downwind
         return 'upstream' if abs(angle_diff) > 90 else 'downstream'
+    
+    
