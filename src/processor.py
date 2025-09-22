@@ -1910,7 +1910,7 @@ def plot_behavior_matrices_for_all_dates(base_path, show_separate_totals=False, 
     import matplotlib.pyplot as plt
     from matplotlib.gridspec import GridSpec
     from matplotlib.colors import ListedColormap, BoundaryNorm
-    import src.data_loader as data_loader
+    import src.core.data_loader as data_loader
     import src.processor as processor
     import traceback
     

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anemotaxis"
+version = "1.0.0"
+description = "Analysis package for anemotaxis experiments"
+authors = [{name = "Sharbatanu Chatterjee, PhD"}]
+requires-python = ">=3.7"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "scipy", 
+    "pandas",
+    "ipywidgets",
+    "jupyter",
+    "opencv-python",
+    "scikit-image", 
+    "tqdm",
+    "seaborn",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "flake8"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.setuptools.package-dir]
+anemotaxis = "src"
