@@ -1604,30 +1604,30 @@ def plot_head_cast_frequency_over_time(analysis_results, show_xlabel=True, show_
 
 ##### Head Cast Detection Plotting #####
 def plot_cast_detection_results(experiments_data, cast_events_data, larva_ids=None, 
-                               figsize=(20,20), save_path=None, show_plots=True,
-                               time_range=None, smooth_sigma=4.0, max_larvae_per_figure=4):
+                               figsize=(15, 8), save_path=None, show_plots=True,
+                               time_range=None):
     """
-    Plot cast detection results showing head angles, body orientation, behavioral states, 
-    and detected head casts for multiple larvae as subplots.
+    Create an interactive plot with a slider to navigate through larvae showing cast detection results.
+    Uses pre-detected cast events data and shows orientations on the same plot as head angles.
     
     Args:
-        experiments_data: Dictionary of larva data (or {'data': ...})
-        cast_events_data: Output from detect_head_casts_in_casts function
+        experiments_data: Dictionary of larva data (or {'data': ...}) - used only for raw data display
+        cast_events_data: Output from detect_head_casts_in_casts function - contains all detected head casts
         larva_ids: List of larva IDs to plot (if None, plots all)
-        figsize: Figure size for the entire plot
-        save_path: Directory to save plots (optional)
+        figsize: Figure size
+        save_path: Path to save plot (optional)
         show_plots: Whether to display plots
         time_range: Tuple (start_time, end_time) to limit plotting range
-        smooth_sigma: Smoothing parameter (should match detection)
-        max_larvae_per_figure: Maximum number of larvae per figure
         
     Returns:
-        List of figure objects
+        Figure object and slider widget
     """
     import matplotlib.pyplot as plt
     import numpy as np
     from scipy.ndimage import gaussian_filter1d
-    import math
+    from matplotlib.widgets import Slider
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
     
     # Handle data structure
     if isinstance(experiments_data, dict) and 'data' in experiments_data:
@@ -1639,364 +1639,305 @@ def plot_cast_detection_results(experiments_data, cast_events_data, larva_ids=No
     if larva_ids is None:
         larva_ids = list(cast_events_data.keys())
     
-    # Filter to only larvae that have data
+    # Filter and process all larvae data
     valid_larva_ids = []
+    larva_data_dict = {}
+    
     for larva_id in larva_ids:
-        if larva_id in data_to_process and larva_id in cast_events_data:
-            valid_larva_ids.append(larva_id)
-        else:
+        if larva_id not in data_to_process or larva_id not in cast_events_data:
             print(f"⚠️  Skipping larva {larva_id} - missing data")
+            continue
+            
+        larva_data = data_to_process[larva_id]
+        cast_events = cast_events_data[larva_id]
+        
+        # Extract required data
+        required_fields = ['t', 'global_state_small_large_state', 'angle_upper_lower_smooth_5']
+        if not all(k in larva_data for k in required_fields):
+            print(f"⚠️  Skipping larva {larva_id} - missing required fields")
+            continue
+        
+        # Get orientation using the data processor function
+        orientations = data_processor.get_larva_orientation_array(larva_data)
+        if orientations is None:
+            print(f"⚠️  Skipping larva {larva_id} - could not compute orientation")
+            continue
+            
+        t = np.array(larva_data['t']).flatten()
+        states = np.array(larva_data['global_state_small_large_state']).flatten()
+        head_angles = np.array(larva_data['angle_upper_lower_smooth_5']).flatten()
+        
+        # Ensure same length
+        min_len = min(len(t), len(states), len(head_angles), len(orientations))
+        t = t[:min_len]
+        states = states[:min_len]
+        head_angles = head_angles[:min_len]
+        orientations = orientations[:min_len]
+        
+        # Apply time range filter if specified
+        if time_range is not None:
+            time_mask = (t >= time_range[0]) & (t <= time_range[1])
+            t = t[time_mask]
+            states = states[time_mask]
+            head_angles = head_angles[time_mask]
+            orientations = orientations[time_mask]
+            
+            # Filter cast events
+            filtered_cast_events = []
+            for cast_event in cast_events:
+                if (cast_event['cast_start_time'] >= time_range[0] and 
+                    cast_event['cast_start_time'] <= time_range[1]):
+                    filtered_cast_events.append(cast_event)
+            cast_events = filtered_cast_events
+        
+        # Convert angles to degrees ONLY ONCE and apply smoothing for display
+        head_angles_deg = np.degrees(head_angles)
+        head_angles_smooth = gaussian_filter1d(head_angles_deg, 4.0/3.0, mode='nearest')
+        
+        # Handle orientation properly - check if it's already in degrees
+        if np.max(np.abs(orientations)) > 10:  # Likely already in degrees
+            orientation_deg = orientations
+        else:  # In radians, convert to degrees
+            orientation_deg = np.degrees(orientations)
+        
+        # Wrap orientation angles to [-180, 180] range
+        orientation_deg = ((orientation_deg + 180) % 360) - 180
+        
+        # Apply smoothing to orientation for display
+        orientation_smooth = gaussian_filter1d(orientation_deg, 4.0/3.0, mode='nearest')
+        
+        # Store processed data
+        larva_data_dict[larva_id] = {
+            't': t,
+            'states': states,
+            'head_angles_deg': head_angles_deg,
+            'head_angles_smooth': head_angles_smooth,
+            'orientation_deg': orientation_deg,
+            'orientation_smooth': orientation_smooth,
+            'cast_events': cast_events
+        }
+        valid_larva_ids.append(larva_id)
     
     if not valid_larva_ids:
         print("No valid larvae found for plotting")
-        return []
+        return None, None
     
-    # Split larvae into groups if there are too many
-    larva_groups = []
-    for i in range(0, len(valid_larva_ids), max_larvae_per_figure):
-        larva_groups.append(valid_larva_ids[i:i + max_larvae_per_figure])
+    # Determine global time range
+    if time_range is not None:
+        t_min, t_max = time_range
+    else:
+        all_times = []
+        for larva_id in valid_larva_ids:
+            all_times.extend(larva_data_dict[larva_id]['t'])
+        t_min = 0
+        t_max = max(all_times) if all_times else 600
     
-    figures = []
+    # Create figure with space for slider and one main subplot
+    fig = plt.figure(figsize=figsize)
     
-    for group_idx, larva_group in enumerate(larva_groups):
-        n_larvae = len(larva_group)
+    # Create subplot areas (leave space at bottom for slider)
+    ax_main = plt.subplot2grid((10, 1), (0, 0), rowspan=8)
+    ax_slider = plt.subplot2grid((10, 1), (9, 0))
+    
+    # Create secondary y-axis for orientation
+    ax_orient = ax_main.twinx()
+    
+    # Initialize empty plot elements for head angles (left axis)
+    raw_head_angle_line, = ax_main.plot([], [], 'gray', alpha=0.3, linewidth=0.5, label='Raw Head Angle')
+    smooth_head_angle_line, = ax_main.plot([], [], 'purple', linewidth=1.5, label='Smoothed Head Angle')
+    
+    # Initialize empty plot elements for orientation (right axis)
+    orientation_line, = ax_orient.plot([], [], 'green', linewidth=1.0, label='Body Orientation')
+    
+    # Lists to store plot elements that will be cleared/updated
+    cast_period_patches = []
+    head_cast_points = []
+    threshold_lines = []
+    
+    def update_plot(larva_idx):
+        """Update the plot for the selected larva"""
+        larva_id = valid_larva_ids[int(larva_idx)]
+        data = larva_data_dict[larva_id]
         
-        # Calculate subplot layout
-        n_cols = 1  # Single column
-        n_rows = n_larvae
+        # Clear previous dynamic elements
+        for patch in cast_period_patches:
+            patch.remove()
+        cast_period_patches.clear()
         
-        # Create figure
-        fig = plt.figure(figsize=(figsize[0], figsize[1] * n_larvae / 4))
+        for point in head_cast_points:
+            point.remove()
+        head_cast_points.clear()
         
-        for subplot_idx, larva_id in enumerate(larva_group):
-            larva_data = data_to_process[larva_id]
-            cast_events = cast_events_data[larva_id]
+        for line in threshold_lines:
+            line.remove()
+        threshold_lines.clear()
+        
+        # Get data for this larva
+        t = data['t']
+        states = data['states']
+        head_angles_deg = data['head_angles_deg']
+        head_angles_smooth = data['head_angles_smooth']
+        orientation_smooth = data['orientation_smooth']
+        cast_events = data['cast_events']
+        
+        # Update main line plots
+        raw_head_angle_line.set_data(t, head_angles_deg)
+        smooth_head_angle_line.set_data(t, head_angles_smooth)
+        orientation_line.set_data(t, orientation_smooth)
+        
+        # Plot cast periods and head casts from pre-detected data
+        for cast_event in cast_events:
+            cast_start_time = cast_event['cast_start_time']
+            cast_end_time = cast_event['cast_end_time']
             
-            try:
-                # Extract required data
-                if not all(k in larva_data for k in ['t', 'global_state_small_large_state', 'angle_upper_lower_smooth_5']):
-                    print(f"⚠️  Skipping larva {larva_id} - missing required fields")
-                    continue
-                    
-                t = np.array(larva_data['t']).flatten()
-                states = np.array(larva_data['global_state_small_large_state']).flatten()
-                head_angles = np.array(larva_data['angle_upper_lower_smooth_5']).flatten()
+            # Add cast period background
+            patch = ax_main.axvspan(cast_start_time, cast_end_time, alpha=0.2, color='red', 
+                                   label='Cast Period' if cast_event == cast_events[0] else '')
+            cast_period_patches.append(patch)
+            
+            # Plot detected head casts using stored data
+            for head_cast in cast_event['head_cast_details']:
+                peak_time = head_cast['peak_time']
+                bend_angle = head_cast['bend_angle']
+                direction = head_cast['direction']
+                is_perpendicular = head_cast['is_perpendicular']
                 
-                # Get orientation
-                orientations = data_processor.get_larva_orientation_array(larva_data)
-                if orientations is None:
-                    print(f"⚠️  Skipping larva {larva_id} - could not compute orientation")
-                    continue
-                
-                # Ensure same length
-                min_len = min(len(t), len(states), len(head_angles), len(orientations))
-                t = t[:min_len]
-                states = states[:min_len]
-                head_angles = head_angles[:min_len]
-                orientations = orientations[:min_len]
-                
-                # Apply time range filter if specified
-                if time_range is not None:
-                    time_mask = (t >= time_range[0]) & (t <= time_range[1])
-                    t = t[time_mask]
-                    states = states[time_mask]
-                    head_angles = head_angles[time_mask]
-                    orientations = orientations[time_mask]
-                    
-                    # Adjust indices in cast events
-                    adjusted_cast_events = []
-                    for cast_event in cast_events:
-                        if (cast_event['cast_start_time'] >= time_range[0] and 
-                            cast_event['cast_start_time'] <= time_range[1]):
-                            adjusted_cast_events.append(cast_event)
-                    cast_events = adjusted_cast_events
-                
-                # Convert head angles to degrees and apply same smoothing as detection
-                head_angles_deg = np.degrees(head_angles)
-                head_angles_smooth = gaussian_filter1d(head_angles_deg, smooth_sigma/3.0)
-                
-                # Create subplot with two y-axes
-                ax1 = plt.subplot(n_rows, n_cols, subplot_idx + 1)
-                ax2 = ax1.twinx()
-                
-                # Define colors for behavioral states
-                state_colors = {
-                    1: 'black',    # run
-                    2: 'red',      # cast
-                    3: 'green',    # stop
-                    4: 'blue',     # hunch
-                    5: 'cyan',     # backup
-                    6: 'yellow'    # roll
-                }
-                
-                # Plot behavioral states as background bars on bottom axis
-                y_bottom = -160  # Bottom of the behavioral state bars
-                bar_height = 40  # Height of behavioral state bars
-                
-                # Group consecutive states for efficiency
-                i = 0
-                while i < len(states):
-                    current_state = states[i]
-                    start_time = t[i]
-                    
-                    # Find end of this state segment
-                    while i < len(states) and states[i] == current_state:
-                        i += 1
-                    end_time = t[i-1] if i-1 < len(t) else t[-1]
-                    
-                    # Plot state bar
-                    color = state_colors.get(current_state, 'gray')
-                    alpha = 0.7 if current_state in [1, 2, 5] else 0.3  # Highlight run, cast, backup
-                    ax1.barh(y_bottom, end_time - start_time, left=start_time, 
-                            height=bar_height, color=color, alpha=alpha, edgecolor='none')
-                
-                # Plot head angles (smoothed) on primary axis
-                ax1.plot(t, head_angles_smooth, 'purple', linewidth=1.5, label='Head Angle (smoothed)', alpha=0.8)
-                
-                # Plot body orientation on secondary axis
-                ax2.plot(t, orientations, 'orange', linewidth=1.5, label='Body Orientation', alpha=0.8)
-                
-                # Plot detected head casts as asterisks
-                for cast_event in cast_events:
-                    for head_cast in cast_event['head_cast_details']:
-                        peak_time = head_cast['peak_time']
-                        bend_angle = head_cast['bend_angle']
-                        direction = head_cast['direction']
-                        
-                        # Color asterisk by direction
-                        color = 'red' if direction == 'upstream' else 'blue'
-                        marker_size = 10
-                        
-                        ax1.plot(peak_time, bend_angle, '*', color=color, markersize=marker_size,
-                                markeredgecolor='black', markeredgewidth=0.5, zorder=10)
-                
-                # Plot cast event boundaries as vertical lines
-                for cast_event in cast_events:
-                    ax1.axvline(cast_event['cast_start_time'], color='red', linestyle='--', 
-                               alpha=0.6, linewidth=1, zorder=5)
-                    ax1.axvline(cast_event['cast_end_time'], color='red', linestyle='--', 
-                               alpha=0.6, linewidth=1, zorder=5)
-                
-                # Formatting
-                ax1.set_ylabel('Head Angle (°)', color='purple', fontsize=10)
-                ax2.set_ylabel('Body Orientation (°)', color='orange', fontsize=10)
-                
-                # Set y-axis limits for both to -180 to 180
-                ax1.set_ylim(-180, 180)
-                ax2.set_ylim(-180, 180)
-                
-                # Color y-axis labels to match plots
-                ax1.tick_params(axis='y', labelcolor='purple', labelsize=8)
-                ax2.tick_params(axis='y', labelcolor='orange', labelsize=8)
-                
-                # Add horizontal reference lines
-                ax1.axhline(0, color='gray', linestyle='-', alpha=0.3, zorder=1)
-                ax2.axhline(0, color='gray', linestyle='-', alpha=0.3, zorder=1)
-                ax2.axhline(90, color='gray', linestyle='--', alpha=0.3, zorder=1)
-                ax2.axhline(-90, color='gray', linestyle='--', alpha=0.3, zorder=1)
-                ax2.axhline(180, color='gray', linestyle='--', alpha=0.3, zorder=1)
-                ax2.axhline(-180, color='gray', linestyle='--', alpha=0.3, zorder=1)
-                
-                # Add larva ID and summary stats as title
-                n_cast_events = len(cast_events)
-                total_head_casts = sum(cast_event['total_head_casts'] for cast_event in cast_events)
-                total_upstream = sum(cast_event['n_upstream_head_casts'] for cast_event in cast_events)
-                total_downstream = sum(cast_event['n_downstream_head_casts'] for cast_event in cast_events)
-                
-                title = (f'Larva {larva_id}: {n_cast_events} casts, {total_head_casts} head casts '
-                        f'({total_upstream}↑, {total_downstream}↓)')
-                ax1.set_title(title, fontsize=11, pad=10)
-                
-                # Only add x-label to bottom subplot
-                if subplot_idx == len(larva_group) - 1:
-                    ax1.set_xlabel('Time (s)', fontsize=10)
+                # Determine marker style and color
+                if bend_angle > 0:
+                    marker = '^'  # Upward triangle for positive bends
+                    base_color = 'red'
                 else:
-                    ax1.set_xticklabels([])
+                    marker = 'v'  # Downward triangle for negative bends
+                    base_color = 'blue'
                 
-                # Add legend only to first subplot
-                if subplot_idx == 0:
-                    from matplotlib.lines import Line2D
-                    from matplotlib.patches import Patch
-                    
-                    legend_elements = [
-                        Line2D([0], [0], color='purple', linewidth=2, label='Head Angle'),
-                        Line2D([0], [0], color='orange', linewidth=2, label='Body Orientation'),
-                        Line2D([0], [0], marker='*', color='red', linewidth=0, markersize=8, 
-                              label='Upstream Head Cast'),
-                        Line2D([0], [0], marker='*', color='blue', linewidth=0, markersize=8, 
-                              label='Downstream Head Cast'),
-                        Line2D([0], [0], color='red', linestyle='--', label='Cast Boundaries'),
-                        Patch(facecolor='black', alpha=0.7, label='Run'),
-                        Patch(facecolor='red', alpha=0.7, label='Cast'),
-                        Patch(facecolor='cyan', alpha=0.7, label='Backup')
-                    ]
-                    
-                    ax1.legend(handles=legend_elements, loc='upper right', bbox_to_anchor=(1.0, 1.0),
-                              fontsize=8, ncol=2)
+                # Use different colors for classified vs unclassified
+                if direction == 'towards_wind':
+                    color = 'orange'
+                    edge_color = 'black'
+                    size = 60
+                elif direction == 'away_from_wind':
+                    color = 'cyan'
+                    edge_color = 'black'
+                    size = 60
+                else:
+                    color = base_color
+                    edge_color = 'gray'
+                    size = 40
                 
-                # Add behavioral state labels at bottom of last subplot
-                if subplot_idx == len(larva_group) - 1:
-                    ax1.text(0.02, -0.15, 'Behaviors: Black=Run, Red=Cast, Cyan=Backup, Green=Stop, Blue=Hunch, Yellow=Roll',
-                            transform=ax1.transAxes, fontsize=8, 
-                            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-                
-            except Exception as e:
-                print(f"❌ Error plotting larva {larva_id}: {e}")
-                continue
+                # Plot on head angle subplot (left axis)
+                scatter = ax_main.scatter([peak_time], [bend_angle], 
+                                        color=color, s=size, marker=marker, 
+                                        zorder=5, edgecolors=edge_color, linewidth=0.5,
+                                        alpha=0.8)
+                head_cast_points.append(scatter)
         
-        # Overall figure title
-        if len(larva_groups) > 1:
-            fig.suptitle(f'Cast Detection Results - Group {group_idx + 1}/{len(larva_groups)}', 
-                        fontsize=14, y=0.98)
-        else:
-            fig.suptitle('Cast Detection Results', fontsize=14, y=0.98)
+        # Add threshold lines to head angle plot
+        threshold_pos = ax_main.axhline(10.0, color='orange', linestyle='--', alpha=0.7, 
+                                       label='Threshold: ±10°')
+        threshold_neg = ax_main.axhline(-10.0, color='orange', linestyle='--', alpha=0.7)
+        threshold_zero = ax_main.axhline(0, color='gray', linestyle='-', alpha=0.5)
         
-        # Tight layout with padding for suptitle
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        threshold_lines.extend([threshold_pos, threshold_neg, threshold_zero])
         
-        # Save if requested
-        if save_path:
-            os.makedirs(save_path, exist_ok=True)
-            if len(larva_groups) > 1:
-                fig_path = os.path.join(save_path, f'cast_detection_group_{group_idx + 1}.pdf')
-            else:
-                fig_path = os.path.join(save_path, 'cast_detection_results.pdf')
-            fig.savefig(fig_path, dpi=300, bbox_inches='tight', 
-                       transparent=True, facecolor='none')
-            print(f"💾 Saved: {fig_path}")
+        # Add perpendicular range indicators to orientation (right axis)
+        perp_left_lower = ax_orient.axhline(-100, color='lightgreen', linestyle=':', alpha=0.7, 
+                                          label='Perpendicular Range')
+        perp_left_upper = ax_orient.axhline(-80, color='lightgreen', linestyle=':', alpha=0.7)
+        perp_right_lower = ax_orient.axhline(80, color='lightgreen', linestyle=':', alpha=0.7)
+        perp_right_upper = ax_orient.axhline(100, color='lightgreen', linestyle=':', alpha=0.7)
         
-        figures.append(fig)
+        threshold_lines.extend([perp_left_lower, perp_left_upper, perp_right_lower, perp_right_upper])
         
-        if show_plots:
-            plt.show()
-        else:
-            plt.close(fig)
-    
-    return figures
-
-def plot_cast_detection_summary(cast_events_data, experiments_data, figsize=(12, 8), 
-                               save_path=None, show_plot=True):
-    """
-    Create a summary plot showing statistics across all larvae.
-    
-    Args:
-        cast_events_data: Output from detect_head_casts_in_casts function
-        experiments_data: Dictionary of larva data
-        figsize: Figure size
-        save_path: Path to save figure (optional)
-        show_plot: Whether to display the plot
-        
-    Returns:
-        Figure object
-    """
-    import matplotlib.pyplot as plt
-    import numpy as np
-    
-    # Collect summary statistics
-    larva_stats = []
-    
-    for larva_id, cast_events in cast_events_data.items():
-        if not cast_events:
-            continue
-            
-        n_cast_events = len(cast_events)
+        # Update title with larva stats
         total_head_casts = sum(cast_event['total_head_casts'] for cast_event in cast_events)
-        total_upstream = sum(cast_event['n_upstream_head_casts'] for cast_event in cast_events)
-        total_downstream = sum(cast_event['n_downstream_head_casts'] for cast_event in cast_events)
+        total_towards_wind = sum(cast_event['n_towards_wind_head_casts'] for cast_event in cast_events)
+        total_away_from_wind = sum(cast_event['n_away_from_wind_head_casts'] for cast_event in cast_events)
+        total_perpendicular = sum(cast_event['n_perpendicular_head_casts'] for cast_event in cast_events)
         
-        # Calculate average cast duration
-        avg_cast_duration = np.mean([cast_event['cast_duration'] for cast_event in cast_events])
+        title = (f'Larva {larva_id} ({int(larva_idx)+1}/{len(valid_larva_ids)}) - '
+                f'Head Casts: {total_head_casts} total ({total_perpendicular} perpendicular: '
+                f'{total_towards_wind} towards wind, {total_away_from_wind} away from wind)')
+        ax_main.set_title(title, fontsize=11, pad=15)
         
-        larva_stats.append({
-            'larva_id': larva_id,
-            'n_cast_events': n_cast_events,
-            'total_head_casts': total_head_casts,
-            'total_upstream': total_upstream,
-            'total_downstream': total_downstream,
-            'avg_cast_duration': avg_cast_duration,
-            'upstream_bias': total_upstream / total_head_casts if total_head_casts > 0 else 0
-        })
+        # Redraw
+        fig.canvas.draw()
     
-    if not larva_stats:
-        print("No cast data found for summary plot")
-        return None
+    # Set up axes
+    ax_main.set_xlim(t_min, t_max)
+    ax_main.set_ylim(-180, 180)
+    ax_main.set_ylabel('Head Angle (°)', fontsize=12, color='purple')
+    ax_main.set_xlabel('Time (s)', fontsize=12)
+    ax_main.grid(True, alpha=0.3)
+    ax_main.tick_params(axis='y', labelcolor='purple')
     
-    # Create summary figure
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=figsize)
+    # Set up orientation axis (right)
+    ax_orient.set_xlim(t_min, t_max)
+    ax_orient.set_ylim(-180, 180)
+    ax_orient.set_ylabel('Body Orientation (°)', fontsize=12, color='green')
+    ax_orient.tick_params(axis='y', labelcolor='green')
     
-    # Plot 1: Cast events per larva
-    larva_ids = [stat['larva_id'] for stat in larva_stats]
-    n_cast_events = [stat['n_cast_events'] for stat in larva_stats]
+    # Create combined legend
+    legend_elements = [
+        Line2D([0], [0], color='gray', alpha=0.3, linewidth=0.5, label='Raw Head Angle'),
+        Line2D([0], [0], color='purple', linewidth=1.5, label='Smoothed Head Angle'),
+        Line2D([0], [0], color='green', linewidth=1.0, label='Body Orientation'),
+        Line2D([0], [0], marker='^', color='orange', linewidth=0, markersize=8, 
+              label='Towards Wind'),
+        Line2D([0], [0], marker='v', color='cyan', linewidth=0, markersize=8, 
+              label='Away from Wind'),
+        Line2D([0], [0], marker='^', color='red', linewidth=0, markersize=6, 
+              label='Unclassified Positive'),
+        Line2D([0], [0], marker='v', color='blue', linewidth=0, markersize=6, 
+              label='Unclassified Negative'),
+        Patch(facecolor='red', alpha=0.2, label='Cast Period'),
+        Line2D([0], [0], color='orange', linestyle='--', alpha=0.7, label='Head Cast Threshold'),
+        Line2D([0], [0], color='lightgreen', linestyle=':', alpha=0.7, label='Perpendicular Range')
+    ]
     
-    ax1.bar(range(len(larva_ids)), n_cast_events, color='red', alpha=0.7)
-    ax1.set_xlabel('Larva ID')
-    ax1.set_ylabel('Number of Cast Events')
-    ax1.set_title('Cast Events per Larva')
-    ax1.set_xticks(range(len(larva_ids)))
-    ax1.set_xticklabels(larva_ids, rotation=45)
+    ax_main.legend(handles=legend_elements, bbox_to_anchor=(1.15, 1), 
+                  loc='upper left', fontsize=9, ncol=1)
     
-    # Plot 2: Head casts per larva
-    total_head_casts = [stat['total_head_casts'] for stat in larva_stats]
+    # Create slider
+    slider = Slider(ax_slider, 'Larva', 0, len(valid_larva_ids)-1, 
+                   valinit=0, valfmt='%d', valstep=1)
     
-    ax2.bar(range(len(larva_ids)), total_head_casts, color='purple', alpha=0.7)
-    ax2.set_xlabel('Larva ID')
-    ax2.set_ylabel('Total Head Casts')
-    ax2.set_title('Head Casts per Larva')
-    ax2.set_xticks(range(len(larva_ids)))
-    ax2.set_xticklabels(larva_ids, rotation=45)
+    # Update function for slider
+    def on_slider_change(val):
+        update_plot(val)
     
-    # Plot 3: Upstream vs Downstream bias
-    upstream_bias = [stat['upstream_bias'] for stat in larva_stats]
+    slider.on_changed(on_slider_change)
     
-    colors = ['red' if bias > 0.5 else 'blue' for bias in upstream_bias]
-    ax3.bar(range(len(larva_ids)), upstream_bias, color=colors, alpha=0.7)
-    ax3.axhline(0.5, color='gray', linestyle='--', alpha=0.7)
-    ax3.set_xlabel('Larva ID')
-    ax3.set_ylabel('Upstream Bias')
-    ax3.set_title('Head Cast Direction Bias per Larva')
-    ax3.set_xticks(range(len(larva_ids)))
-    ax3.set_xticklabels(larva_ids, rotation=45)
-    ax3.set_ylim(0, 1)
+    # Initialize with first larva
+    update_plot(0)
     
-    # Plot 4: Average cast duration
-    avg_durations = [stat['avg_cast_duration'] for stat in larva_stats]
+    # Adjust layout to accommodate the legend
+    plt.subplots_adjust(bottom=0.15, right=0.75, top=0.95, hspace=0.3)
     
-    ax4.bar(range(len(larva_ids)), avg_durations, color='green', alpha=0.7)
-    ax4.set_xlabel('Larva ID')
-    ax4.set_ylabel('Average Cast Duration (frames)')
-    ax4.set_title('Average Cast Duration per Larva')
-    ax4.set_xticks(range(len(larva_ids)))
-    ax4.set_xticklabels(larva_ids, rotation=45)
+    # Add instructions
+    fig.text(0.02, 0.02, 'Use slider to navigate. Orange/cyan triangles show classified head casts when perpendicular to flow.',
+            fontsize=9, ha='left', va='bottom',
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
     
-    # Add overall statistics as text
-    total_larvae = len(larva_stats)
-    total_casts = sum(n_cast_events)
-    total_hc = sum(total_head_casts)
-    overall_upstream_bias = sum(stat['total_upstream'] for stat in larva_stats) / total_hc if total_hc > 0 else 0
-    
-    stats_text = (f"Overall Statistics:\n"
-                 f"Larvae: {total_larvae}\n"
-                 f"Cast Events: {total_casts}\n"
-                 f"Head Casts: {total_hc}\n"
-                 f"Upstream Bias: {overall_upstream_bias:.2f}")
-    
-    fig.text(0.02, 0.98, stats_text, transform=fig.transFigure, 
-             fontsize=10, va='top', ha='left',
-             bbox=dict(boxstyle='round,pad=0.5', facecolor='lightgray', alpha=0.8))
-    
-    plt.tight_layout()
-    
+    # Save if requested
     if save_path:
-        fig.savefig(save_path, dpi=300, bbox_inches='tight', 
+        if save_path.endswith('.pdf'):
+            fig_path = save_path
+        else:
+            os.makedirs(save_path, exist_ok=True)
+            fig_path = os.path.join(save_path, 'cast_detection_interactive.pdf')
+        
+        fig.savefig(fig_path, dpi=300, bbox_inches='tight', 
                    transparent=True, facecolor='none')
-        print(f"💾 Summary plot saved: {save_path}")
+        print(f"💾 Saved: {fig_path}")
     
-    if show_plot:
+    if show_plots:
         plt.show()
     else:
         plt.close(fig)
     
-    return fig
+    return fig, slider
+
+
 
 def plot_head_cast_bias_perpendicular(bias_results, figsize=(4, 6), save_path=None, ax=None, title=None):
     """

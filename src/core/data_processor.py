@@ -1051,7 +1051,7 @@ def analyze_run_velocity_by_orientation(experiments_data, bin_width=10, sigma=2)
     }
 
 
-def analyze_head_casts_by_orientation(experiments_data, bin_width=20, peak_threshold=5.0, peak_prominence=3.0, smooth_sigma=4.0, large_casts_only=True, jump_threshold=15):
+def analyze_head_casts_by_orientation(experiments_data, bin_width=20, peak_threshold=5.0, peak_prominence=3.0, smooth_sigma=4.0, large_casts_only=True):
     """
     Analyze head cast frequency as a function of larva orientation at the beginning of cast events.
     Now uses upstream/downstream classification.
@@ -1063,7 +1063,6 @@ def analyze_head_casts_by_orientation(experiments_data, bin_width=20, peak_thres
         peak_prominence=peak_prominence,
         smooth_sigma=smooth_sigma,
         large_casts_only=large_casts_only,
-        jump_threshold=jump_threshold
     )
     
     # Set up orientation bins
@@ -1670,7 +1669,7 @@ def analyze_run_velocity_over_time(experiments_data, window=60, step=10):
         'n_larvae': len(metric_arrays)
     }
 
-def analyze_head_casts_over_time(experiments_data, window=60, step=20, peak_threshold=5.0, peak_prominence=3.0, smooth_sigma=4.0, large_casts_only=True, jump_threshold=15):
+def analyze_head_casts_over_time(experiments_data, window=60, step=20, peak_threshold=5.0, peak_prominence=3.0, smooth_sigma=4.0, large_casts_only=True):
     """
     Analyze head cast frequency over time using sliding windows.
     Now uses upstream/downstream classification.
@@ -1682,7 +1681,6 @@ def analyze_head_casts_over_time(experiments_data, window=60, step=20, peak_thre
         peak_prominence=peak_prominence,
         smooth_sigma=smooth_sigma,
         large_casts_only=large_casts_only,
-        jump_threshold=jump_threshold
     )
     
     if isinstance(experiments_data, dict) and 'data' in experiments_data:
@@ -1773,10 +1771,9 @@ def analyze_head_casts_over_time(experiments_data, window=60, step=20, peak_thre
 ### =============================================================================
 ######## Analyze cast in details ########
 ### =============================================================================
-def detect_head_casts_in_casts(experiments_data, peak_threshold=5.0, peak_prominence=3.0, min_cast_duration=3, smooth_sigma=4.0, large_casts_only=True, jump_threshold=15):
+def detect_head_casts_in_casts(experiments_data, peak_threshold=3.0, peak_prominence=2.0, min_cast_duration=3, smooth_sigma=4.0, large_casts_only=True):
     """
-    Detect head casts (cast peaks) during cast events and classify them as upstream or downstream.
-    Uses bend angle direction + orientation to determine upstream/downstream, similar to compare_cast_directions_peaks.
+    Detect ALL head casts during cast events and classify them as towards/away from wind only when perpendicular.
     
     Args:
         experiments_data: Dictionary of larva data (or {'data': ...})
@@ -1785,7 +1782,6 @@ def detect_head_casts_in_casts(experiments_data, peak_threshold=5.0, peak_promin
         min_cast_duration: Minimum duration of cast event in frames
         smooth_sigma: Gaussian smoothing parameter for head angles
         large_casts_only: If True, only detect head casts in large casts (state == 2)
-        jump_threshold: Threshold for detecting orientation jumps in degrees/frame
         
     Returns:
         Dictionary with cast event data for each larva, including head cast direction classifications
@@ -1799,8 +1795,9 @@ def detect_head_casts_in_casts(experiments_data, peak_threshold=5.0, peak_promin
         data_to_process = experiments_data
     
     # Define perpendicular ranges (both left and right sides)
-    left_perp_range = (-90 - 10, -90 + 10)  # Using ±10° around -90°
-    right_perp_range = (90 - 10, 90 + 10)   # Using ±10° around +90°
+    # HARDCODED - THIS IS AT 20° TOLERANCE - TO CHANGE
+    left_perp_range = (-90 - 20, -90 + 20)  # Using ±20° around -90°
+    right_perp_range = (90 - 20, 90 + 20)   # Using ±20° around +90°
     
     def is_perpendicular(angle):
         """Check if an angle is within the perpendicular ranges"""
@@ -1808,6 +1805,17 @@ def detect_head_casts_in_casts(experiments_data, peak_threshold=5.0, peak_promin
                 (right_perp_range[0] <= angle <= right_perp_range[1]))
     
     all_cast_events = {}
+    
+    # Print summary header
+    print("🎯 Head Cast Detection Summary")
+    print("=" * 50)
+    
+    total_larvae = 0
+    total_cast_periods = 0
+    total_head_casts = 0
+    total_towards_wind = 0
+    total_away_from_wind = 0
+    total_perpendicular_head_casts = 0
     
     for larva_id, larva_data in data_to_process.items():
         try:
@@ -1833,32 +1841,12 @@ def detect_head_casts_in_casts(experiments_data, peak_threshold=5.0, peak_promin
             t = t[:min_len]
             orientations = orientations[:min_len]
             
-            # Convert head angles to degrees
+            # Convert head angles to degrees and apply smoothing
             head_angles_deg = np.degrees(head_angles)
+            orientation_deg = np.degrees(orientations)
             
-            # Apply orientation jump detection and smoothing
-            orientation_raw = orientations.copy()
-            orientation_diff = np.abs(np.diff(orientations))
-            orientation_diff = np.insert(orientation_diff, 0, 0)
-            
-            # Find jumps bigger than threshold
-            jumps = orientation_diff > jump_threshold
-            orientation_masked = np.ma.array(orientations, mask=jumps)
-            
-            # Interpolate masked values for smoothing
-            orientation_interp = orientation_masked.filled(np.nan)
-            mask = np.isnan(orientation_interp)
-            
-            if np.sum(~mask) > 1:
-                indices = np.arange(len(orientation_interp))
-                valid_indices = indices[~mask]
-                valid_values = orientation_interp[~mask]
-                orientation_interp[mask] = np.interp(indices[mask], valid_indices, valid_values)
-            
-            # Apply smoothing to orientation
-            orientation_smooth = gaussian_filter1d(orientation_interp, smooth_sigma/3.0)
-            
-            # Apply smoothing to bend angle
+            # Apply smoothing to orientation and bend angle
+            orientation_smooth = gaussian_filter1d(orientation_deg, smooth_sigma/3.0)
             bend_angle_smooth = gaussian_filter1d(head_angles_deg, smooth_sigma/3.0)
             
             # Find cast segments
@@ -1890,6 +1878,11 @@ def detect_head_casts_in_casts(experiments_data, peak_threshold=5.0, peak_promin
             
             # Process each cast segment
             larva_cast_events = []
+            larva_cast_periods = len(cast_segments)
+            larva_head_casts = 0
+            larva_towards_wind = 0
+            larva_away_from_wind = 0
+            larva_perpendicular_head_casts = 0
             
             for start_idx, end_idx in cast_segments:
                 cast_head_angles = bend_angle_smooth[start_idx:end_idx+1]
@@ -1902,66 +1895,73 @@ def detect_head_casts_in_casts(experiments_data, peak_threshold=5.0, peak_promin
                 if len(cast_head_angles) < 3:
                     continue
                 
-                # Find peaks in absolute bend angles (like in compare_cast_directions_peaks)
+                # Find ALL peaks in absolute bend angles (regardless of orientation)
                 pos_peaks, _ = find_peaks(cast_head_angles, height=peak_threshold, prominence=peak_prominence, distance=3)
                 neg_peaks, _ = find_peaks(-cast_head_angles, height=peak_threshold, prominence=peak_prominence, distance=3)
                 
                 # Combine and sort peaks by position
                 all_peaks = sorted(list(pos_peaks) + list(neg_peaks))
                 
-                # Classify peaks as upstream/downstream and count by type
+                # Process ALL peaks and classify only perpendicular ones
                 head_cast_details = []
-                upstream_count = 0
-                downstream_count = 0
+                towards_wind_count = 0
+                away_from_wind_count = 0
+                perpendicular_count = 0
                 
                 for peak_idx in all_peaks:
                     global_peak_idx = start_idx + peak_idx
-                    
-                    # Check if larva is perpendicular at this peak
+                    bend_angle = cast_head_angles[peak_idx]
                     peak_orientation = cast_orientations[peak_idx]
-                    if is_perpendicular(peak_orientation):
-                        bend_angle = cast_head_angles[peak_idx]
+                    
+                    # Normalize orientation to -180 to 180 range
+                    while peak_orientation > 180:
+                        peak_orientation -= 360
+                    while peak_orientation <= -180:
+                        peak_orientation += 360
+                    
+                    # Default classification
+                    direction = 'unclassified'
+                    is_perp = is_perpendicular(peak_orientation)
+                    
+                    # Only classify direction if larva is perpendicular
+                    if is_perp:
+                        perpendicular_count += 1
                         
-                        # Normalize orientation to -180 to 180 range
-                        while peak_orientation > 180:
-                            peak_orientation -= 360
-                        while peak_orientation <= -180:
-                            peak_orientation += 360
-                        
-                        # Classify as upstream or downstream
-                        is_upstream = False
+                        # Classify as towards or away from wind
                         if (peak_orientation > 0 and peak_orientation < 180):  # Right side (positive orientation)
-                            if bend_angle < 0:  # Negative bend is upstream
-                                is_upstream = True
-                            else:  # Positive bend is downstream
-                                is_upstream = False
+                            if bend_angle < 0:  # Negative bend is towards wind
+                                direction = 'towards_wind'
+                                towards_wind_count += 1
+                            else:  # Positive bend is away from wind
+                                direction = 'away_from_wind'
+                                away_from_wind_count += 1
                         else:  # Left side (negative orientation)
-                            if bend_angle > 0:  # Positive bend is upstream
-                                is_upstream = True
-                            else:  # Negative bend is downstream
-                                is_upstream = False
-                        
-                        direction = 'upstream' if is_upstream else 'downstream'
-                        
-                        if is_upstream:
-                            upstream_count += 1
-                        else:
-                            downstream_count += 1
-                        
-                        head_cast_details.append({
-                            'direction': direction,
-                            'amplitude': abs(bend_angle),
-                            'peak_time': cast_times[peak_idx],
-                            'peak_orientation': peak_orientation,
-                            'bend_angle': bend_angle,
-                            'cast_frame_idx': peak_idx,
-                            'global_frame_idx': global_peak_idx
-                        })
+                            if bend_angle > 0:  # Positive bend is towards wind
+                                direction = 'towards_wind'
+                                towards_wind_count += 1
+                            else:  # Negative bend is away from wind
+                                direction = 'away_from_wind'
+                                away_from_wind_count += 1
+                    
+                    head_cast_details.append({
+                        'direction': direction,
+                        'amplitude': abs(bend_angle),
+                        'peak_time': cast_times[peak_idx],
+                        'peak_orientation': peak_orientation,
+                        'bend_angle': bend_angle,
+                        'cast_frame_idx': peak_idx,
+                        'global_frame_idx': global_peak_idx,
+                        'is_perpendicular': is_perp
+                    })
                 
                 # Sort head casts by time within the cast
                 head_cast_details.sort(key=lambda x: x['peak_time'])
                 
-                total_head_casts = len(head_cast_details)
+                total_head_casts_in_cast = len(head_cast_details)
+                larva_head_casts += total_head_casts_in_cast
+                larva_towards_wind += towards_wind_count
+                larva_away_from_wind += away_from_wind_count
+                larva_perpendicular_head_casts += perpendicular_count
                 
                 # Create cast event record
                 cast_event = {
@@ -1970,9 +1970,10 @@ def detect_head_casts_in_casts(experiments_data, peak_threshold=5.0, peak_promin
                     'cast_end_time': cast_times[-1],
                     'cast_duration': len(cast_times),
                     'cast_start_orientation': cast_start_orientation,
-                    'total_head_casts': total_head_casts,
-                    'n_upstream_head_casts': upstream_count,
-                    'n_downstream_head_casts': downstream_count,
+                    'total_head_casts': total_head_casts_in_cast,
+                    'n_towards_wind_head_casts': towards_wind_count,
+                    'n_away_from_wind_head_casts': away_from_wind_count,
+                    'n_perpendicular_head_casts': perpendicular_count,
                     'head_cast_details': head_cast_details,
                     'global_start_idx': start_idx,
                     'global_end_idx': end_idx
@@ -1982,9 +1983,34 @@ def detect_head_casts_in_casts(experiments_data, peak_threshold=5.0, peak_promin
             
             all_cast_events[larva_id] = larva_cast_events
             
+            # Update totals
+            if larva_cast_periods > 0:
+                total_larvae += 1
+                total_cast_periods += larva_cast_periods
+                total_head_casts += larva_head_casts
+                total_towards_wind += larva_towards_wind
+                total_away_from_wind += larva_away_from_wind
+                total_perpendicular_head_casts += larva_perpendicular_head_casts
+                
+                print(f"Larva {larva_id:2d}: {larva_cast_periods:2d} cast periods, "
+                      f"{larva_head_casts:3d} head casts ({larva_perpendicular_head_casts:2d} perpendicular: "
+                      f"{larva_towards_wind:2d} towards wind, {larva_away_from_wind:2d} away from wind)")
+            
         except Exception as e:
             print(f"Error processing larva {larva_id}: {str(e)}")
             continue
+    
+    # Print summary statistics
+    print("-" * 50)
+    print(f"TOTAL:     {total_cast_periods:2d} cast periods, "
+          f"{total_head_casts:3d} head casts ({total_perpendicular_head_casts:2d} perpendicular)")
+    print(f"Wind direction: {total_towards_wind:2d} towards wind, {total_away_from_wind:2d} away from wind")
+    if total_larvae > 0:
+        print(f"Average head casts per larva: {total_head_casts/total_larvae:.1f}")
+    if total_cast_periods > 0:
+        print(f"Average head casts per cast period: {total_head_casts/total_cast_periods:.1f}")
+    if (total_towards_wind + total_away_from_wind) > 0:
+        print(f"Towards wind bias: {total_towards_wind/(total_towards_wind+total_away_from_wind)*100:.1f}%")
     
     return all_cast_events
 
