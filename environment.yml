@@ -19,5 +19,3 @@ dependencies:
   - tqdm
   - pip:
     - arrow  # Only essential pip packages kept
-
-prefix: /home/schatterjee/miniconda3/envs/anemotaxis
