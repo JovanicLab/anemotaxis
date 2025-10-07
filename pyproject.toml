@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "anemotaxis"
 version = "1.0.0"
-description = "Analysis package for anemotaxis experiments"
+description = "Analysis package for larval Drosophila anemotaxis experiments"
 authors = [{name = "Sharbatanu Chatterjee, PhD"}]
 requires-python = ">=3.7"
 dependencies = [

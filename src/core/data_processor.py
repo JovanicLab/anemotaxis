@@ -17,9 +17,9 @@ from scipy import stats
 # You can cehck xy_axis_characterisation.ipuynb
 # 
 # The orientation system:
-# - 0° = larva facing downstream (-x direction) 
+# - 0° = larva facing downstream or AWAY FROM WIND SOURCE (-x direction) 
 # - +90° = larva facing left (perpendicular to flow)
-# - ±180° = larva facing upstream (+x direction)
+# - ±180° = larva facing upstream or TOWARDS WIND SOURCE (+x direction)
 # - -90° = larva facing right (perpendicular to flow)
 # 
 # This is particularly useful for anemotaxis analysis where the flow direction

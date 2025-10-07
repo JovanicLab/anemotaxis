@@ -949,13 +949,13 @@ def plot_global_behavior_matrix(trx_data, show_plot=True, ax=None):
 
 ##### Orientation Histogram Plotting #####
 
-def plot_orientation_histogram(analysis_results, ax=None, show_plot=True, control=False, 
+def plot_orientation_histogram(analysis_results, ax=None, show_plot=True, linestyle = '-',
                               show_se=True, se_alpha=0.3, color=None, label=None,
-                              xlabel=None, ylabel='Probability', show_xlabel=True, show_ylabel=True,
-                              title=None, xlim=(-185, 185), show_legend=True, ylim=None, min_amplitude=None):
-
+                              xlabel=None, ylabel=None, show_xlabel=True, show_ylabel=True,
+                              title=None, xlim=(-185, 185), show_legend=True, ylim=None, 
+                              min_amplitude=None, plot_type='run'):
     """
-    General function to plot any histogram with error bars across orientations.
+    Universal function to plot any histogram with error bars across orientations.
     
     Args:
         analysis_results: Dictionary containing histogram data with keys:
@@ -968,16 +968,46 @@ def plot_orientation_histogram(analysis_results, ax=None, show_plot=True, contro
         control: If True, use dashed line style
         show_se: Whether to show standard error shading
         se_alpha: Alpha transparency for standard error shading
-        color: Color for the plot (default: 'black' if control, 'blue' otherwise)
+        color: Color for the plot (auto-determined if None)
         label: Custom label for the plot
-        xlabel: X-axis label
-        ylabel: Y-axis label
+        xlabel: X-axis label (auto-determined if None)
+        ylabel: Y-axis label (auto-determined if None)
+        show_xlabel: Whether to show x-axis label
+        show_ylabel: Whether to show y-axis label
         title: Plot title
         xlim: X-axis limits as tuple (min, max)
+        show_legend: Whether to show legend
+        ylim: Y-axis limits as tuple (min, max)
+        min_amplitude: Minimum amplitude for turn amplitude plots
+        plot_type: Type of analysis ('run', 'turn', 'backup', 'velocity', 'head_cast', 'turn_amplitude')
     
     Returns:
         The matplotlib axis used for plotting
     """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    # Define plot configurations
+    plot_configs = {
+        'run': {'color': 'black', 'ylabel': 'Run Probability'},
+        'turn': {'color': 'red', 'ylabel': 'Turn Probability'},
+        'backup': {'color': 'cyan', 'ylabel': 'Backup Probability'},
+        'velocity': {'color': 'black', 'ylabel': 'Run Velocity (body lengths/s)'},
+        'head_cast': {'color': 'purple', 'ylabel': 'Head Cast Number'},
+        'turn_amplitude': {'color': 'red', 'ylabel': 'Turn Amplitude (°)'}
+    }
+    
+    # Get configuration for this plot type
+    config = plot_configs.get(plot_type, plot_configs['run'])
+    
+    # Set defaults based on plot type
+    if color is None:
+        color = config['color']
+    if ylabel is None:
+        ylabel = config['ylabel']
+    if xlabel is None:
+        xlabel = 'Body Orientations (°)'
+    
     if ax is None and show_plot:
         fig, ax = plt.subplots(figsize=(8, 6))
         created_fig = True
@@ -989,11 +1019,6 @@ def plot_orientation_histogram(analysis_results, ax=None, show_plot=True, contro
         ax.text(0.5, 0.5, f"No {ylabel.lower()} data available", 
                 ha='center', va='center', transform=ax.transAxes)
         return ax
-
-    # Set plot style
-    linestyle = '--' if control else '-'
-    if color is None:
-        color = 'black'
 
     # Extract results and convert to numpy arrays
     mean_hist = np.array(analysis_results['mean_hist'])
@@ -1042,15 +1067,12 @@ def plot_orientation_histogram(analysis_results, ax=None, show_plot=True, contro
     if ylim:
         ax.set_ylim(ylim)
         y_max = ylim[1]
-    elif 'Turn Amplitude' in ylabel:
+    elif plot_type == 'turn_amplitude':
         # For amplitude plots, set appropriate range
-        data_max = np.max(mean_hist + se_hist) if len(se_hist) > 0 else np.max(mean_hist)
-        
-        # Use provided min_amplitude or default to 60
+        data_max = np.nanmax(valid_mean + valid_se) if len(valid_se) > 0 else np.nanmax(valid_mean)
         y_min = min_amplitude if min_amplitude is not None else 60
         y_max = max(180, np.ceil(data_max / 10) * 10)  # Round up to nearest 10°, min 180°
         ax.set_ylim(y_min, y_max)
-        y_max = y_max
     else:
         # For probability plots, start from 0
         y_min, y_max = ax.get_ylim()
@@ -1058,8 +1080,8 @@ def plot_orientation_histogram(analysis_results, ax=None, show_plot=True, contro
         ax.set_ylim(0, y_max_rounded)
         y_max = y_max_rounded
 
-    # Set y-ticks with appropriate intervals
-    if 'Turn Amplitude' in ylabel:
+    # Set y-ticks with appropriate intervals based on plot type
+    if plot_type == 'turn_amplitude':
         # For amplitude plots, use 20° or 30° intervals
         y_min = min_amplitude if min_amplitude is not None else 60
         if y_max <= 120:
@@ -1067,12 +1089,11 @@ def plot_orientation_histogram(analysis_results, ax=None, show_plot=True, contro
         else:
             tick_interval = 30
         y_ticks = np.arange(y_min, y_max + tick_interval, tick_interval)
-    elif 'Head Cast Number' in ylabel:
+    elif plot_type == 'head_cast':
         # For head cast number, use 1 as interval
         tick_interval = 1
         n_ticks = int(y_max / tick_interval)
         y_ticks = np.arange(0, (n_ticks + 1) * tick_interval, tick_interval)
-
     else:
         # For probability plots
         if y_max <= 0.15:
@@ -1093,7 +1114,7 @@ def plot_orientation_histogram(analysis_results, ax=None, show_plot=True, contro
     
     # Labels and title
     if show_xlabel:
-        ax.set_xlabel(xlabel if xlabel else 'Body Orientations (°)')
+        ax.set_xlabel(xlabel)
     if show_ylabel:
         ax.set_ylabel(ylabel)
     
@@ -1111,20 +1132,61 @@ def plot_orientation_histogram(analysis_results, ax=None, show_plot=True, contro
     return ax
 
 
-def plot_orientation_histogram_polar(analysis_results, ax=None, show_plot=True, control=False, 
+def plot_orientation_histogram_polar(analysis_results, ax=None, show_plot=True, 
                                    show_se=True, se_alpha=0.3, color=None, label=None,
                                    title=None, bar_style=True, tick_fontsize=8, n_radial_ticks=3,
-                                   is_amplitude=False, min_amplitude=None):
+                                   min_amplitude=None, plot_type='run'):
     """
-    Plot orientation histogram in polar coordinates as bars with optional standard error lines.
+    Universal function to plot orientation histogram in polar coordinates as bars with optional standard error lines.
+    
+    Args:
+        analysis_results: Dictionary containing histogram data
+        ax: Matplotlib polar axis to plot on
+        show_plot: Whether to display the plot
+        control: If True, use different styling
+        show_se: Whether to show standard error lines
+        se_alpha: Alpha transparency for standard error
+        color: Color for the plot (auto-determined if None)
+        label: Custom label for the plot
+        title: Plot title
+        bar_style: Whether to use bar style (True) or line style (False)
+        tick_fontsize: Font size for tick labels
+        n_radial_ticks: Number of radial ticks to show
+        min_amplitude: Minimum amplitude for turn amplitude plots
+        plot_type: Type of analysis ('run', 'turn', 'backup', 'velocity', 'head_cast', 'turn_amplitude')
+    
+    Returns:
+        The matplotlib polar axis used for plotting
     """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    # Define plot configurations
+    plot_configs = {
+        'run': {'color': 'black'},
+        'turn': {'color': 'red'},
+        'backup': {'color': 'cyan'},
+        'velocity': {'color': 'black'},
+        'head_cast': {'color': 'purple'},
+        'turn_amplitude': {'color': 'red', 'is_amplitude': True}
+    }
+    
+    # Get configuration for this plot type
+    config = plot_configs.get(plot_type, plot_configs['run'])
+    is_amplitude = config.get('is_amplitude', False)
+    
+    # Set defaults based on plot type
+    if color is None:
+        color = config['color']
+    
     if ax is None and show_plot:
         fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(projection='polar'))
         created_fig = True
     else:
         created_fig = False
-    n_subjects = analysis_results.get('n_larvae', 
-                                    analysis_results.get('n_subjects', 0))
+        
+    n_subjects = analysis_results.get('n_larvae', analysis_results.get('n_subjects', 0))
+    
     # Handle empty results
     if n_subjects == 0 or len(analysis_results.get('mean_hist', [])) == 0:
         ax.text(0, 0, "No orientation data available", 
@@ -1156,10 +1218,6 @@ def plot_orientation_histogram_polar(analysis_results, ax=None, show_plot=True, 
     bin_width_deg = bin_centers[1] - bin_centers[0] if len(bin_centers) > 1 else 20
     bin_width_rad = np.deg2rad(bin_width_deg)
 
-    # Set plot style
-    if color is None:
-        color = 'black'
-
     if bar_style:
         # Plot as polar bars - USE FILTERED DATA
         bars = ax.bar(theta, valid_mean, width=bin_width_rad, 
@@ -1180,13 +1238,19 @@ def plot_orientation_histogram_polar(analysis_results, ax=None, show_plot=True, 
                 ax.plot([th - cap_width/2, th + cap_width/2], 
                        [lower_bound[i], lower_bound[i]], 
                        color=color, linewidth=1.5, alpha=0.8)
+    else:
+        # Plot as polar line
+        ax.plot(theta, valid_mean, color=color, linewidth=2, label=label)
+        if show_se and len(valid_se) > 0:
+            ax.fill_between(theta, valid_mean - valid_se, valid_mean + valid_se,
+                           color=color, alpha=se_alpha)
     
     # Polar plot formatting
     ax.set_theta_zero_location('E')
     ax.set_theta_direction(1)
     
-    # Set radial limits based on data type - USE NANMAX TO HANDLE NaN VALUES
-    if is_amplitude:
+    # Set radial limits based on data type
+    if is_amplitude or plot_type == 'turn_amplitude':
         # For amplitude data, start from min_amplitude and adjust maximum
         data_max = np.nanmax(valid_mean + valid_se) if len(valid_se) > 0 else np.nanmax(valid_mean)
         
@@ -1211,7 +1275,7 @@ def plot_orientation_histogram_polar(analysis_results, ax=None, show_plot=True, 
     
     # Customize radial ticks
     if n_radial_ticks > 0:
-        if is_amplitude:
+        if is_amplitude or plot_type == 'turn_amplitude':
             # For amplitudes, use 20° or 30° intervals
             y_min = min_amplitude if min_amplitude is not None else 60
             if r_max <= 120:
@@ -1240,7 +1304,8 @@ def plot_orientation_histogram_polar(analysis_results, ax=None, show_plot=True, 
     
     # Customize tick formatting with smaller fonts
     ax.set_thetagrids(np.arange(0, 360, 45), 
-                     ['0°', '45°', '90°', '135°', '180°', '-135°', '-90°', '-45°'], fontsize=tick_fontsize)
+                     ['0°', '45°', '90°', '135°', '180°', '-135°', '-90°', '-45°'], 
+                     fontsize=tick_fontsize)
     ax.tick_params(axis='x', labelsize=tick_fontsize, pad=3)
     ax.tick_params(axis='y', labelsize=tick_fontsize-1)
     
@@ -1260,18 +1325,59 @@ def plot_orientation_histogram_polar(analysis_results, ax=None, show_plot=True, 
     return ax
 
 
-
-
 ##### Metric Over Time Plotting #####
 
 
 def plot_metric_over_time(analysis_results, show_plot=True, ax=None, show_error=True, 
-                         color='blue', alpha=0.3, show_individuals=False, label=None,
-                         xlabel='Time (s)', ylabel='Metric', title=None, ylim=None,
-                         show_slope=True, slope_color='blue', show_xlabel=True, show_ylabel=True, min_amplitude=None):
+                         show_individuals=False, label=None, xlabel='Time (s)', ylabel = None, 
+                         color=None, title=None, ylim=None, show_slope=True, show_xlabel=True, 
+                         show_ylabel=True, min_amplitude=None, plot_type='run'):
     """
-    General function to plot any metric over time with error bars across individuals.
+    Universal function to plot any metric over time with error bars across individuals.
+    
+    Args:
+        analysis_results: Dictionary containing time series data with keys:
+                         - 'time_centers': time points
+                         - 'mean_metric': mean values over time
+                         - 'se_metric': standard error values
+                         - 'metric_arrays': individual larva arrays (optional)
+                         - 'n_larvae': number of subjects
+        ax: Matplotlib axis to plot on
+        show_plot: Whether to display the plot
+        show_error: Whether to show error bars
+        show_individuals: Whether to show individual traces
+        label: Custom label for the plot
+        xlabel: X-axis label
+        title: Plot title
+        ylim: Y-axis limits as tuple (min, max)
+        show_slope: Whether to show linear fit
+        show_xlabel: Whether to show x-axis label
+        show_ylabel: Whether to show y-axis label
+        min_amplitude: Minimum amplitude for turn amplitude plots
+        plot_type: Type of analysis ('run', 'turn', 'backup', 'velocity', 'head_cast', 'turn_amplitude')
+    
+    Returns:
+        The matplotlib axis used for plotting
     """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import scipy.stats as stats
+    
+    # Define plot configurations
+    plot_configs = {
+        'run': {'color': 'black', 'ylabel': 'Run Probability'},
+        'turn': {'color': 'red', 'ylabel': 'Turn Probability'},
+        'backup': {'color': 'cyan', 'ylabel': 'Backup Probability'},
+        'velocity': {'color': 'black', 'ylabel': 'Run Velocity (body lengths/s)'},
+        'head_cast': {'color': 'purple', 'ylabel': 'Head Cast Rate (per second)'},
+        'turn_amplitude': {'color': 'red', 'ylabel': 'Turn Amplitude (°)'}
+    }
+    
+    # Get configuration for this plot type
+    config = plot_configs.get(plot_type, plot_configs['run'])
+    color = config['color']
+    ylabel = config['ylabel']
+    
     # Extract data using standardized keys
     time_centers = analysis_results.get('time_centers', [])
     mean_values = analysis_results.get('mean_metric', [])
@@ -1305,14 +1411,14 @@ def plot_metric_over_time(analysis_results, show_plot=True, ax=None, show_error=
                    alpha=0.2, color=color, linewidth=0.5)
     
     # Plot mean line
-    ax.plot(time_centers, mean_values, color=color, linewidth=2)
+    ax.plot(time_centers, mean_values, color=color, linewidth=2, label=label)
     
     # Plot error bars if requested
     if show_error and len(se_values) > 0 and n_subjects > 1:
         ax.fill_between(time_centers, 
                        np.array(mean_values) - np.array(se_values), 
                        np.array(mean_values) + np.array(se_values),
-                       alpha=alpha, color=color)
+                       alpha=0.3, color=color)
     
     # Fit and plot slope if requested
     slope_text = ""
@@ -1331,7 +1437,7 @@ def plot_metric_over_time(analysis_results, show_plot=True, ax=None, show_error=
             
             # Plot fitted line
             ax.plot(time_centers, fitted_line, 
-                   color=slope_color, linestyle='--', linewidth=1.5)
+                   color=color, linestyle='--', linewidth=1.5)
             
             # Create legend text
             slope_text = f'Slope: {slope:.2e}\nR²={r_value**2:.3f}, p={p_value:.3f}'
@@ -1354,10 +1460,10 @@ def plot_metric_over_time(analysis_results, show_plot=True, ax=None, show_error=
     if ylim:
         ax.set_ylim(ylim)
         y_max = ylim[1]
-    elif 'Turn Amplitude' in ylabel:
+    elif plot_type == 'turn_amplitude':
         # For amplitude plots, set appropriate range
         data_max = np.nanmax(mean_values + np.array(se_values)) if len(se_values) > 0 else np.nanmax(mean_values)
-        y_min = 60  # Minimum turn amplitude
+        y_min = min_amplitude if min_amplitude is not None else 60
         y_max = max(180, np.ceil(data_max / 10) * 10)  # Round up to nearest 10°, min 180°
         ax.set_ylim(y_min, y_max)
     else:
@@ -1365,7 +1471,7 @@ def plot_metric_over_time(analysis_results, show_plot=True, ax=None, show_error=
         ax.set_ylim(0, y_max)
     
     # Set y-ticks to nice intervals
-    if 'Turn Amplitude' in ylabel:
+    if plot_type == 'turn_amplitude':
         # For amplitude plots, use 20° or 30° intervals
         if y_max <= 120:
             tick_interval = 20
@@ -1414,182 +1520,7 @@ def plot_metric_over_time(analysis_results, show_plot=True, ax=None, show_error=
     return ax
 
 
-
-
-### Specific Plotting Functions Using the Generalized Functions ###
-
-def plot_run_probabilities(analysis_results, show_xlabel=True, show_ylabel=True, show_legend=False, **kwargs):
-    return plot_orientation_histogram(
-        analysis_results, 
-        color='black',
-        show_xlabel=show_xlabel,
-        show_ylabel=show_ylabel,
-        show_legend=show_legend,
-        **kwargs
-    )
-
-def plot_turn_probabilities(analysis_results, show_xlabel=True, show_ylabel=True, show_legend=False, **kwargs):
-    return plot_orientation_histogram(
-        analysis_results, 
-        color='red',
-        show_xlabel=show_xlabel,
-        show_ylabel=show_ylabel,
-        show_legend=show_legend,
-        **kwargs
-    )
-
-def plot_backup_probabilities(analysis_results, show_xlabel=True, show_ylabel=True, show_legend=False, **kwargs):
-    return plot_orientation_histogram(
-        analysis_results, 
-        color='cyan',
-        show_xlabel=show_xlabel,
-        show_ylabel=show_ylabel,
-        show_legend=show_legend,
-        **kwargs
-    )
-
-def plot_turn_amplitudes(analysis_results, show_xlabel=True, show_ylabel=True, show_legend=False, min_amplitude=None, **kwargs):
-    return plot_orientation_histogram(
-        analysis_results, 
-        color='red',
-        show_xlabel=show_xlabel,
-        show_ylabel=show_ylabel,
-        show_legend=show_legend,
-        min_amplitude=min_amplitude,
-        **kwargs
-    )
-
-def plot_run_velocity(analysis_results, show_xlabel=True, show_ylabel=True, show_legend=False, **kwargs):
-    return plot_orientation_histogram(
-        analysis_results, 
-        color='black',
-        show_xlabel=show_xlabel,
-        show_ylabel=show_ylabel,
-        show_legend=show_legend,
-        **kwargs
-    )
-
-def plot_head_cast_frequency(analysis_results, show_xlabel=True, show_ylabel=True, show_legend=False, **kwargs):
-    """Plot head cast frequency by orientation."""
-    return plot_orientation_histogram(
-        analysis_results, 
-        color='purple',
-        show_xlabel=show_xlabel,
-        show_ylabel=show_ylabel,
-        show_legend=show_legend,
-        **kwargs
-    )
-
-
-# Update the polar plotting functions
-def plot_run_probabilities_polar(analysis_results, n_radial_ticks=3, **kwargs):
-    return plot_orientation_histogram_polar(
-        analysis_results, 
-        color='black',
-        n_radial_ticks=n_radial_ticks,
-        **kwargs
-    )
-
-def plot_turn_probabilities_polar(analysis_results, n_radial_ticks=3, **kwargs):
-    return plot_orientation_histogram_polar(
-        analysis_results, 
-        color='red',
-        n_radial_ticks=n_radial_ticks,
-        **kwargs
-    )
-
-def plot_backup_probabilities_polar(analysis_results, n_radial_ticks=3, **kwargs):
-    return plot_orientation_histogram_polar(
-        analysis_results, 
-        color='cyan',
-        n_radial_ticks=n_radial_ticks,
-        **kwargs
-    )
-
-def plot_turn_amplitudes_polar(analysis_results, n_radial_ticks=3, min_amplitude=None, **kwargs):
-    return plot_orientation_histogram_polar(
-        analysis_results, 
-        color='red',
-        n_radial_ticks=n_radial_ticks,
-        is_amplitude=True,
-        min_amplitude=min_amplitude,
-        **kwargs
-    )
-
-def plot_run_velocity_polar(analysis_results, n_radial_ticks=3, **kwargs):
-    """
-    Plot run velocity by orientation in polar coordinates.
-    """    
-    return plot_orientation_histogram_polar(
-        analysis_results, 
-        color='black',
-        n_radial_ticks=n_radial_ticks,
-        **kwargs
-    )
-
-def plot_head_cast_frequency_polar(analysis_results, n_radial_ticks=3, **kwargs):
-    """Plot head cast frequency by orientation in polar coordinates."""
-    return plot_orientation_histogram_polar(
-        analysis_results, 
-        color='purple',
-        n_radial_ticks=n_radial_ticks,
-        **kwargs
-    )
-
-### Plots over time ###
-
-def plot_run_probability_over_time(analysis_results, show_xlabel=True, show_ylabel=True, **kwargs):
-    return plot_metric_over_time(
-        analysis_results,
-        color='black',
-        slope_color='black',
-        show_xlabel=show_xlabel,
-        show_ylabel=show_ylabel,
-        **kwargs
-    )
-
-def plot_turn_probability_over_time(analysis_results, show_xlabel=True, show_ylabel=True, **kwargs):
-    return plot_metric_over_time(
-        analysis_results,
-        color='red',
-        slope_color='red',
-        show_xlabel=show_xlabel,
-        show_ylabel=show_ylabel,
-        **kwargs
-    )
-
-def plot_backup_probability_over_time(analysis_results, show_xlabel=True, show_ylabel=True, **kwargs):
-    return plot_metric_over_time(
-        analysis_results,
-        color='cyan',
-        slope_color='cyan',
-        show_xlabel=show_xlabel,
-        show_ylabel=show_ylabel,
-        **kwargs
-    )
-
-def plot_turn_amplitudes_over_time(analysis_results, show_xlabel=True, show_ylabel=True, min_amplitude=None, **kwargs):
-    return plot_metric_over_time(
-        analysis_results, 
-        color='red',
-        slope_color='red',
-        show_xlabel=show_xlabel,
-        show_ylabel=show_ylabel,
-        min_amplitude=min_amplitude,
-        **kwargs
-    )
-
-def plot_run_velocity_over_time(analysis_results, show_xlabel=True, show_ylabel=True, **kwargs):
-    """Plot run velocity over time with error bars."""
-    return plot_metric_over_time(
-        analysis_results,
-        color='black',
-        slope_color='black',
-        show_xlabel=show_xlabel,
-        show_ylabel=show_ylabel,
-        **kwargs
-    )
-
+### Simplified wrapper functions (optional - for backwards compatibility) ###
 
 def plot_head_cast_frequency_over_time(analysis_results, show_xlabel=True, show_ylabel=True, **kwargs):
     """Plot head cast frequency over time with error bars."""
