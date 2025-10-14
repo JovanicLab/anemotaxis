@@ -1625,17 +1625,17 @@ def plot_cast_detection_results(experiments_data, cast_events_data, larva_ids=No
         head_angles_deg = np.degrees(head_angles)
         head_angles_smooth = gaussian_filter1d(head_angles_deg, 4.0/3.0, mode='nearest')
         
-        # Handle orientation properly - check if it's already in degrees
-        if np.max(np.abs(orientations)) > 10:  # Likely already in degrees
-            orientation_deg = orientations
-        else:  # In radians, convert to degrees
-            orientation_deg = np.degrees(orientations)
+        # # Handle orientation properly - check if it's already in degrees
+        # if np.max(np.abs(orientations)) > 10:  # Likely already in degrees
+        #     orientation_deg = orientations
+        # else:  # In radians, convert to degrees
+        #     orientation_deg = np.degrees(orientations)
         
-        # Wrap orientation angles to [-180, 180] range
-        orientation_deg = ((orientation_deg + 180) % 360) - 180
+        # # Wrap orientation angles to [-180, 180] range
+        # orientation_deg = ((orientation_deg + 180) % 360) - 180
         
         # Apply smoothing to orientation for display
-        orientation_smooth = gaussian_filter1d(orientation_deg, 4.0/3.0, mode='nearest')
+        orientation_smooth = gaussian_filter1d(orientations, 4.0/3.0, mode='nearest')
         
         # Store processed data
         larva_data_dict[larva_id] = {
@@ -1643,7 +1643,7 @@ def plot_cast_detection_results(experiments_data, cast_events_data, larva_ids=No
             'states': states,
             'head_angles_deg': head_angles_deg,
             'head_angles_smooth': head_angles_smooth,
-            'orientation_deg': orientation_deg,
+            'orientation_deg': orientations,
             'orientation_smooth': orientation_smooth,
             'cast_events': cast_events
         }
@@ -1873,10 +1873,10 @@ def plot_cast_detection_results(experiments_data, cast_events_data, larva_ids=No
 def plot_head_cast_bias_perpendicular(bias_results, figsize=(4, 6), save_path=None, ax=None, title=None):
     """
     Plot analysis of head cast bias when larvae are perpendicular to flow.
-    Shows bias towards upstream vs downstream using box plots.
+    Shows bias towards upstream vs downstream using box plots with individual data points.
     
     Args:
-        bias_results: Output from analyze_first_head_cast_bias_perpendicular
+        bias_results: Output from analyze_head_cast_bias
         figsize: Figure size (width, height)
         save_path: Optional path to save the figure
         ax: Optional matplotlib axis to plot on
@@ -1904,134 +1904,150 @@ def plot_head_cast_bias_perpendicular(bias_results, figsize=(4, 6), save_path=No
         if title:
             ax.set_title(title)
         else:
-            ax.set_title('Head Cast Bias Analysis (Perpendicular to Flow)')
+            ax.set_title('Head Cast Bias Analysis')
         return fig
     
     # Get per-larva data
-    larva_upstream_biases = [summary['upstream_bias'] for summary in bias_results['larva_summaries']]
-    larva_downstream_biases = [summary['downstream_bias'] for summary in bias_results['larva_summaries']]
+    larva_towards_biases = [summary['towards_bias'] for summary in bias_results['larva_summaries']]
+    larva_away_biases = [summary['away_bias'] for summary in bias_results['larva_summaries']]
     
-    # Data for box plot
-    data = [larva_upstream_biases, larva_downstream_biases]
-    positions = [1, 2]
+    # Data for box plot with closer spacing
+    data = [larva_towards_biases, larva_away_biases]
+    positions = [1, 1.3]  # Reduced spacing from [1, 2] to [1, 1.8]
     labels_box = ['Towards Wind', 'Away from Wind']
-    color = 'purple'  # Single color for both bars
     
-    # Create box plot - show outliers but not individual points
-    bp = ax.boxplot(data, positions=positions, notch=True, patch_artist=True, 
-                   widths=0.6, showfliers=True)
+    # Choose color based on analysis type
+    analysis_type = bias_results.get('analysis_type', 'first')
+    color_map = {
+        'first': '#8B0000',   # Dark red
+        'last': '#DC143C',    # Crimson  
+        'all': '#FF6B6B'      # Light coral red
+    }
+    plot_color = color_map.get(analysis_type, '#E53935')
+    colors = [plot_color, plot_color]
     
-    # Color boxes the same purple color
-    for i, box in enumerate(bp['boxes']):
-        box.set(facecolor=color, alpha=0.6)
-        bp['medians'][i].set(color='black', linewidth=2)
+    # Create box plot
+    bp = ax.boxplot(data, positions=positions, patch_artist=True, 
+                   widths=0.2, showfliers=False,  # Reduced width from 0.4 to 0.3
+                   boxprops=dict(linewidth=1.5),
+                   whiskerprops=dict(linewidth=1.5),
+                   capprops=dict(linewidth=1.5),
+                   medianprops=dict(linewidth=2, color='black'))
     
-    # Add median values as text on each box
-    for i, (pos, d) in enumerate(zip(positions, data)):
+    # Color boxes
+    for i, (box, color) in enumerate(zip(bp['boxes'], colors)):
+        box.set(facecolor=color, alpha=0.7, edgecolor='black', linewidth=1.5)
+    
+    # Add individual data points with jitter
+    np.random.seed(42)
+    for i, (pos, d, color) in enumerate(zip(positions, data, colors)):
         if len(d) > 0:
-            median = np.median(d)
+            jitter = np.random.uniform(-0.05, 0.05, len(d))  # Reduced jitter
+            x_positions = [pos + j for j in jitter]
+            ax.scatter(x_positions, d, color=color, s=40, alpha=0.8, 
+                      edgecolors='black', linewidth=0.5, zorder=5)
+    
+    # Add mean ± SE text boxes
+    for i, (pos, d, color) in enumerate(zip(positions, data, colors)):
+        if len(d) > 0:
+            mean_val = np.mean(d)
+            se_val = stats.sem(d)
+            text_str = f"{mean_val:.2f}±{se_val:.2f}"
+            ax.text(pos, -0.1, text_str, ha='center', va='bottom',
+                   fontsize=10, color='black',
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor='white', 
+                            edgecolor='gray', alpha=0.9))
+    
+    # Statistical test annotation
+    if len(larva_towards_biases) > 1 and len(larva_away_biases) > 1:
+        p_wilcoxon = bias_results.get('p_value_wilcoxon', np.nan)
+        
+        if not np.isnan(p_wilcoxon):
+            if p_wilcoxon < 0.001:
+                ptext = "***"
+            elif p_wilcoxon < 0.01:
+                ptext = "**" 
+            elif p_wilcoxon < 0.05:
+                ptext = "*"
+            else:
+                ptext = "ns"
             
-            # Display median
-            ax.text(pos, median, f"{median:.2f}", ha='center', va='center',
-                   fontsize=10, fontweight='bold', color='white',
-                   bbox=dict(boxstyle="round,pad=0.2", facecolor='black', alpha=0.8))
+            # Add horizontal comparison line
+            y_pos = 1.05
+            ax.plot([positions[0], positions[1]], [y_pos, y_pos], 'k-', lw=1.5)
+            ax.plot([positions[0], positions[0]], [y_pos-0.02, y_pos], 'k-', lw=1.5)
+            ax.plot([positions[1], positions[1]], [y_pos-0.02, y_pos], 'k-', lw=1.5)
+            ax.text(np.mean(positions), y_pos + 0.03, ptext, ha='center', va='bottom', 
+                   fontsize=14)
     
-    # Add p-value annotation for difference between upstream and downstream
-    if len(larva_upstream_biases) > 1 and len(larva_downstream_biases) > 1:
-        tstat, pval = stats.ttest_rel(larva_upstream_biases, larva_downstream_biases)
-        if pval < 0.001:
-            ptext = "***"
-        elif pval < 0.01:
-            ptext = "**"
-        elif pval < 0.05:
-            ptext = "*"
-        else:
-            ptext = "ns"
-            
-        # Add horizontal line with ticks at the ends
-        y_pos = 0.9
-        ax.plot([1, 2], [y_pos, y_pos], 'k-', lw=1)
-        # Add ticks at the ends
-        ax.plot([1, 1], [y_pos-0.01, y_pos+0.01], 'k-', lw=1)
-        ax.plot([2, 2], [y_pos-0.01, y_pos+0.01], 'k-', lw=1)
-        ax.text(1.5, y_pos + 0.02, ptext, ha='center', va='bottom', fontsize=12)
+    # Add chance level line
+    ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.7, linewidth=1)
     
-    # Add significance markers for comparison to chance (0.5)
-    for i, (pos, d, label) in enumerate(zip(positions, data, labels_box)):
-        if len(d) > 1:
-            tstat, pval = stats.ttest_1samp(d, 0.5)
-            if pval < 0.05:
-                stars = "*" * sum([pval < p for p in [0.05, 0.01, 0.001]])
-                ax.text(pos, 0.45, stars, ha='center', va='top', fontsize=16)
+    # Configure plot limits
+    ax.set_ylim(-0.15, 1.15)
+    ax.set_xlim(0.8, 1.6)  # Adjusted for closer spacing
     
-    # Add a dashed line at 0.5 (chance level)
-    ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.7)
-    
-    # Configure the plot with detached axes
-    ax.set_ylim(0, 1)
-    ax.set_xlim(0.5, 2.5)
-    ax.set_ylabel('Probability of Cast Direction')
+    # Labels and ticks
+    ax.set_ylabel('Probability', fontsize=14)
     ax.set_xticks(positions)
-    ax.set_xticklabels(labels_box)
+    ax.set_xticklabels(labels_box)  # Reduced from 12 to 10
+    ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    ax.set_yticklabels(['0.0', '0.2', '0.4', '0.6', '0.8', '1.0'])
+    ax.tick_params(axis='x', which='major', labelsize=10, length=6, rotation=20)  # Smaller x-axis labels
+    ax.tick_params(axis='y', which='major', labelsize=14, length=6)  # Keep y-axis labels large
     
-    # Set y-axis from 0 to 1 with ticks at 0 and 1
-    ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
-    ax.set_yticklabels(['0', '0.25', '0.5', '0.75', '1'])
-    
-    # Detach axes - remove top and right spines
+    # Style axes - detached appearance
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_bounds(0, 1)
+    ax.spines['bottom'].set_bounds(positions[0], positions[1])
+    # ax.spines['left'].set_position(('outward', 20))
+    ax.spines['bottom'].set_position(('outward', 2))
     
-    # Move left and bottom spines away from data
-    ax.spines['left'].set_position(('outward', 10))
-    ax.spines['bottom'].set_position(('outward', 10))
-    
-    # Title with analysis type
+    # Title
     if title:
-        ax.set_title(title, fontsize=12, pad=15)
+        ax.set_title(title, fontsize=14, pad=20)
     else:
-        analysis_type = bias_results.get('analysis_type', 'first')
-        title_map = {'first': 'First Head Cast', 'last': 'Last Head Cast', 'all': 'All Head Casts'}
-        ax.set_title(f'{title_map.get(analysis_type, "Head Cast")} Bias\n(Perpendicular to Flow)',
-                    fontsize=12, pad=15)
+        title_map = {'first': 'First Head Cast Bias', 'last': 'Last Head Cast Bias', 'all': 'All Head Cast Bias'}
+        ax.set_title(title_map.get(analysis_type, "Head Cast Bias"),
+                    fontsize=14, pad=20)
     
-    # Add sample size as small text
+    # Sample size in top right
     n_larvae = bias_results.get('n_larvae', 0)
-    total_casts = bias_results.get('total_casts', 0)
-    ax.text(0.02, 0.98, f'n = {n_larvae} larvae\n{total_casts} casts', 
-           transform=ax.transAxes, fontsize=8, va='top', ha='left', 
-           bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
+    ax.text(0.98, 0.9, f'n={n_larvae}', 
+           transform=ax.transAxes, fontsize=10, va='top', ha='right',
+           bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
     
-    # Only save if we created our own figure
+    # Save and display
     if save_path and created_fig:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
         print(f"Figure saved to {save_path}")
     
-    # Only show if we created our own figure
     if created_fig:
         plt.tight_layout()
         plt.show()
-    
-    # Print summary to console only if we created our own figure
-    if created_fig:
+        
+        # Print summary
         analysis_type = bias_results.get('analysis_type', 'first')
         print(f"\n=== HEAD CAST DIRECTION BIAS ANALYSIS ({analysis_type.upper()}) ===")
         print(f"Total perpendicular cast events: {bias_results.get('total_casts', 0)}")
         print(f"Number of larvae: {bias_results.get('n_larvae', 0)}")
-        print(f"Upstream head casts: {bias_results.get('total_upstream', 0)} ({bias_results.get('overall_upstream_bias', 0):.1%})")
-        print(f"Downstream head casts: {bias_results.get('total_downstream', 0)} ({bias_results.get('overall_downstream_bias', 0):.1%})")
-        print(f"Binomial test p-value: {bias_results.get('p_value_binomial', 1.0):.4f}")
+        print(f"Towards wind head casts: {bias_results.get('total_towards', 0)} ({bias_results.get('overall_towards_bias', 0):.1%})")
+        print(f"Away from wind head casts: {bias_results.get('total_away', 0)} ({bias_results.get('overall_away_bias', 0):.1%})")
         
-        if bias_results.get('p_value_binomial', 1.0) < 0.05:
-            bias_direction = "upstream" if bias_results.get('overall_upstream_bias', 0) > 0.5 else "downstream"
-            print(f"RESULT: Significant bias toward {bias_direction} head casts (p < 0.05)")
+        p_wilcoxon = bias_results.get('p_value_wilcoxon', np.nan)
+        if not np.isnan(p_wilcoxon):
+            print(f"Wilcoxon signed-rank test p-value: {p_wilcoxon:.4f}")
+            
+            if p_wilcoxon < 0.05:
+                bias_direction = "towards wind" if bias_results.get('mean_larva_towards_bias', 0) > 0.5 else "away from wind"
+                print(f"RESULT: Significant bias toward {bias_direction} head casts (p < 0.05)")
+            else:
+                print("RESULT: No significant bias detected (p ≥ 0.05)")
         else:
-            print("RESULT: No significant bias detected (p ≥ 0.05)")
+            print("RESULT: Statistical testing not performed (insufficient data)")
     
     return fig
-
-
-
 #### NAVIGATIONAL INDEX CALCULATION ####
 def plot_navigational_index_over_time(ni_time_results, figsize=(8, 6), save_path=None, 
                                      show_individuals=False, show_error=True, ax=None):

@@ -458,22 +458,36 @@ def analyze_turn_probability_by_orientation(experiments_data, bin_width=10, sigm
     else:
         data_to_process = experiments_data
 
+    # Add tracking variables for debugging
+    total_casts_processed = 0
+    total_turns_detected = 0
+    orientation_changes = []  # Store all orientation changes
+    turns_per_bin_debug = {}  # Track turns per orientation bin
+    all_turn_events = []  # Store detailed turn information
+    all_cast_events = []  # Store ALL cast events with orientations
+
     for larva_id, larva_data in data_to_process.items():
         try:
-            if 'global_state_small_large_state' not in larva_data:
+            if 'global_state_small_large_state' not in larva_data or 't' not in larva_data:
                 continue
             states = np.array(larva_data['global_state_small_large_state']).flatten()
+            times = np.array(larva_data['t']).flatten()  # Use actual timing data
 
             orientations = get_larva_orientation_array(larva_data)
             if orientations is None:
                 continue
                 
-            min_len = min(len(orientations), len(states))
+            min_len = min(len(orientations), len(states), len(times))
             orientations = orientations[:min_len]
             states = states[:min_len]
+            times = times[:min_len]
 
             # Identify turns: casts that result in significant orientation change
             is_turn = np.zeros(len(states), dtype=bool)
+            larva_turns = 0
+            larva_casts = 0
+            
+            print(f"\n🐛 Larva {larva_id} cast orientations:")
             
             i = 0
             while i < len(states):
@@ -483,17 +497,81 @@ def analyze_turn_probability_by_orientation(experiments_data, bin_width=10, sigm
                         i += 1
                     cast_end = i - 1
                     
-                    # Check if this cast resulted in a turn
+                    larva_casts += 1
+                    total_casts_processed += 1
+                    
+                    # Record ALL cast events with their orientations
                     if cast_end > cast_start:
                         orient_start = orientations[cast_start]
                         orient_end = orientations[cast_end]
+                        time_start = times[cast_start]
+                        time_end = times[cast_end]
                         
                         # Compute orientation change (handle wraparound)
                         delta = np.angle(np.exp(1j * np.deg2rad(orient_end - orient_start)), deg=True)
                         
+                        # Store ALL cast events
+                        cast_event = {
+                            'larva_id': larva_id,
+                            'cast_number': larva_casts,
+                            'time_start': time_start,
+                            'time_end': time_end,
+                            'duration': time_end - time_start,
+                            'start_orientation': orient_start,
+                            'end_orientation': orient_end,
+                            'orientation_change': delta,
+                            'abs_orientation_change': np.abs(delta),
+                            'is_turn': np.abs(delta) >= min_turn_amplitude
+                        }
+                        all_cast_events.append(cast_event)
+                        
+                        # Print ALL cast details
+                        turn_marker = "TURN" if np.abs(delta) >= min_turn_amplitude else "cast"
+                        print(f"   {turn_marker:4s} {larva_casts:2d}: t={time_start:6.1f}-{time_end:5.1f}s, "
+                              f"θ={orient_start:6.1f}°→{orient_end:6.1f}° (Δ={delta:+6.1f}°)")
+                        
+                        # Store all orientation changes for analysis
+                        orientation_changes.append({
+                            'larva_id': larva_id,
+                            'start_orientation': orient_start,
+                            'end_orientation': orient_end,
+                            'delta': delta,
+                            'abs_delta': np.abs(delta),
+                            'is_turn': np.abs(delta) >= min_turn_amplitude,
+                            'time_start': time_start,
+                            'time_end': time_end
+                        })
+                        
                         if np.abs(delta) >= min_turn_amplitude:
                             # Mark all frames in this cast as turn frames
                             is_turn[cast_start:cast_end+1] = True
+                            larva_turns += 1
+                            total_turns_detected += 1
+                            
+                            # Store detailed turn event
+                            turn_event = {
+                                'larva_id': larva_id,
+                                'turn_number': larva_turns,
+                                'time_start': time_start,
+                                'time_end': time_end,
+                                'duration': time_end - time_start,
+                                'start_orientation': orient_start,
+                                'end_orientation': orient_end,
+                                'orientation_change': delta,
+                                'abs_orientation_change': np.abs(delta)
+                            }
+                            all_turn_events.append(turn_event)
+                            
+                            # Track which orientation bin this turn belongs to
+                            bin_idx = int((orient_start + 180) // bin_width)
+                            if bin_idx not in turns_per_bin_debug:
+                                turns_per_bin_debug[bin_idx] = []
+                            turns_per_bin_debug[bin_idx].append({
+                                'larva_id': larva_id,
+                                'start_orientation': orient_start,
+                                'delta': delta,
+                                'time': time_start
+                            })
                 else:
                     i += 1
 
@@ -502,6 +580,8 @@ def analyze_turn_probability_by_orientation(experiments_data, bin_width=10, sigm
                 'orientations': orientations,
                 'is_turn': is_turn
             })
+            
+            print(f"   Summary: {larva_casts:2d} casts, {larva_turns:2d} turns ({100*larva_turns/max(1,larva_casts):4.1f}%)")
                 
         except Exception as e:
             print(f"Error processing larva {larva_id}: {str(e)}")
@@ -542,13 +622,56 @@ def analyze_turn_probability_by_orientation(experiments_data, bin_width=10, sigm
     mean_hist = np.mean(hist_arrays, axis=0)
     se_hist = stats.sem(hist_arrays, axis=0)  # Standard error of the mean
 
+    # Print summary statistics
+    print(f"\n🎯 Cast & Turn Analysis Summary:")
+    print(f"   Total casts processed: {total_casts_processed}")
+    print(f"   Total turns detected: {total_turns_detected}")
+    print(f"   Overall turn rate: {100*total_turns_detected/max(1,total_casts_processed):.1f}%")
+    print(f"   Min turn amplitude: {min_turn_amplitude}°")
+    
+    # Print orientation change statistics
+    if orientation_changes:
+        all_deltas = [change['abs_delta'] for change in orientation_changes]
+        print(f"   Orientation change stats:")
+        print(f"     Mean: {np.mean(all_deltas):.1f}°")
+        print(f"     Median: {np.median(all_deltas):.1f}°")
+        print(f"     Range: {np.min(all_deltas):.1f}° - {np.max(all_deltas):.1f}°")
+    
+    # Print ALL cast orientations chronologically
+    print(f"\n📍 All cast orientations (chronological):")
+    all_cast_events.sort(key=lambda x: x['time_start'])
+    for event in all_cast_events:
+        turn_marker = "TURN" if event['is_turn'] else "cast"
+        print(f"   Larva {event['larva_id']:2d}, {turn_marker:4s}: "
+              f"t={event['time_start']:6.1f}s, θ={event['start_orientation']:6.1f}°, "
+              f"Δ={event['orientation_change']:+6.1f}°")
+    
+    # Print turns per orientation bin
+    print(f"\n📊 Turns per orientation bin:")
+    for i, center in enumerate(bin_centers):
+        if i in turns_per_bin_debug:
+            n_turns = len(turns_per_bin_debug[i])
+            deltas = [turn['delta'] for turn in turns_per_bin_debug[i]]
+            mean_delta = np.mean(np.abs(deltas))
+            print(f"   {center:6.1f}°: {n_turns:2d} turns (mean Δ = {mean_delta:5.1f}°)")
+
     return {
         'orientations': [data['orientations'][data['is_turn']] for data in larva_orientations],  # Turn orientations only
         'hist_arrays': hist_arrays,          # Individual turn probability histograms per larva
         'mean_hist': mean_hist,              # Mean turn probability across larvae
         'se_hist': se_hist,                  # Standard error across larvae
         'bin_centers': bin_centers,
-        'n_larvae': len(larva_orientations)
+        'n_larvae': len(larva_orientations),
+        # Add debugging information to return dict
+        'debug_info': {
+            'total_casts': total_casts_processed,
+            'total_turns': total_turns_detected,
+            'orientation_changes': orientation_changes,
+            'turns_per_bin': turns_per_bin_debug,
+            'turn_rate': total_turns_detected/max(1,total_casts_processed),
+            'all_turn_events': all_turn_events,
+            'all_cast_events': all_cast_events  # NEW: All cast events with orientations
+        }
     }
 
 ## The following definition of turn probability marks only the initial frame of a turning cast as a "turn" frame.
@@ -943,9 +1066,8 @@ def analyze_run_velocity_by_orientation(experiments_data, bin_width=10, sigma=2)
                 continue
                 
             states = np.array(larva_data['global_state_large_state']).flatten()
-            
-            # Filter for RUN states only (1.0 = large run, 0.5 = small run)
-            is_run = np.logical_or(states == 1.0, states == 0.5)
+            # Filter for RUN states only (1.0 = large run)
+            is_run = (states == 1.0)
             if not np.any(is_run):
                 continue
 
@@ -1808,7 +1930,7 @@ def detect_head_casts_in_casts(experiments_data, peak_threshold=3.0, peak_promin
     
     # Print summary header
     print("🎯 Head Cast Detection Summary")
-    print("=" * 50)
+    print("=" * 80)
     
     total_larvae = 0
     total_cast_periods = 0
@@ -1816,6 +1938,10 @@ def detect_head_casts_in_casts(experiments_data, peak_threshold=3.0, peak_promin
     total_towards_wind = 0
     total_away_from_wind = 0
     total_perpendicular_head_casts = 0
+    
+    # Store per-larva probabilities for mean calculation
+    larva_towards_probs = []
+    larva_away_probs = []
     
     for larva_id, larva_data in data_to_process.items():
         try:
@@ -1845,8 +1971,8 @@ def detect_head_casts_in_casts(experiments_data, peak_threshold=3.0, peak_promin
             head_angles_deg = np.degrees(head_angles)
             orientation_deg = np.degrees(orientations)
             
-            # Apply smoothing to orientation and bend angle
-            orientation_smooth = gaussian_filter1d(orientation_deg, smooth_sigma/3.0)
+            # # Apply smoothing to orientation and bend angle
+            # orientation_smooth = gaussian_filter1d(orientation_deg, smooth_sigma/3.0)
             bend_angle_smooth = gaussian_filter1d(head_angles_deg, smooth_sigma/3.0)
             
             # Find cast segments
@@ -1887,10 +2013,10 @@ def detect_head_casts_in_casts(experiments_data, peak_threshold=3.0, peak_promin
             for start_idx, end_idx in cast_segments:
                 cast_head_angles = bend_angle_smooth[start_idx:end_idx+1]
                 cast_times = t[start_idx:end_idx+1]
-                cast_orientations = orientation_smooth[start_idx:end_idx+1]
+                cast_orientations = orientations[start_idx:end_idx+1]
                 
                 # Store larva orientation at the BEGINNING of the cast event
-                cast_start_orientation = orientation_smooth[start_idx]
+                cast_start_orientation = orientations[start_idx]
                 
                 if len(cast_head_angles) < 3:
                     continue
@@ -1992,32 +2118,63 @@ def detect_head_casts_in_casts(experiments_data, peak_threshold=3.0, peak_promin
                 total_away_from_wind += larva_away_from_wind
                 total_perpendicular_head_casts += larva_perpendicular_head_casts
                 
-                print(f"Larva {larva_id:2d}: {larva_cast_periods:2d} cast periods, "
-                      f"{larva_head_casts:3d} head casts ({larva_perpendicular_head_casts:2d} perpendicular: "
-                      f"{larva_towards_wind:2d} towards wind, {larva_away_from_wind:2d} away from wind)")
+                # Calculate probabilities for this larva (only if there are perpendicular head casts)
+                if larva_perpendicular_head_casts > 0:
+                    larva_towards_prob = larva_towards_wind / larva_perpendicular_head_casts
+                    larva_away_prob = larva_away_from_wind / larva_perpendicular_head_casts
+                    larva_towards_probs.append(larva_towards_prob)
+                    larva_away_probs.append(larva_away_prob)
+                    
+                    print(f"Larva {larva_id:2d}: {larva_cast_periods:2d} cast periods, "
+                          f"{larva_head_casts:3d} head casts ({larva_perpendicular_head_casts:2d} perpendicular: "
+                          f"{larva_towards_wind:2d} towards [{larva_towards_prob:.1%}], "
+                          f"{larva_away_from_wind:2d} away [{larva_away_prob:.1%}])")
+                else:
+                    print(f"Larva {larva_id:2d}: {larva_cast_periods:2d} cast periods, "
+                          f"{larva_head_casts:3d} head casts (0 perpendicular)")
             
         except Exception as e:
             print(f"Error processing larva {larva_id}: {str(e)}")
             continue
     
+    # Calculate mean probabilities across larvae
+    if larva_towards_probs:
+        mean_towards_prob = np.mean(larva_towards_probs)
+        mean_away_prob = np.mean(larva_away_probs)
+        se_towards_prob = stats.sem(larva_towards_probs)
+        se_away_prob = stats.sem(larva_away_probs)
+    else:
+        mean_towards_prob = np.nan
+        mean_away_prob = np.nan
+        se_towards_prob = np.nan
+        se_away_prob = np.nan
+    
     # Print summary statistics
-    print("-" * 50)
+    print("-" * 80)
     print(f"TOTAL:     {total_cast_periods:2d} cast periods, "
           f"{total_head_casts:3d} head casts ({total_perpendicular_head_casts:2d} perpendicular)")
-    print(f"Wind direction: {total_towards_wind:2d} towards wind, {total_away_from_wind:2d} away from wind")
+    
+    if total_perpendicular_head_casts > 0:
+        overall_towards_prob = total_towards_wind / total_perpendicular_head_casts
+        overall_away_prob = total_away_from_wind / total_perpendicular_head_casts
+        print(f"Overall:   {total_towards_wind:2d} towards [{overall_towards_prob:.1%}], "
+              f"{total_away_from_wind:2d} away [{overall_away_prob:.1%}]")
+    
+    if larva_towards_probs:
+        print(f"Mean across larvae: {mean_towards_prob:.1%} ± {se_towards_prob:.1%} towards, "
+              f"{mean_away_prob:.1%} ± {se_away_prob:.1%} away (n={len(larva_towards_probs)} larvae)")
+    
     if total_larvae > 0:
         print(f"Average head casts per larva: {total_head_casts/total_larvae:.1f}")
     if total_cast_periods > 0:
         print(f"Average head casts per cast period: {total_head_casts/total_cast_periods:.1f}")
-    if (total_towards_wind + total_away_from_wind) > 0:
-        print(f"Towards wind bias: {total_towards_wind/(total_towards_wind+total_away_from_wind)*100:.1f}%")
     
     return all_cast_events
 
-def analyze_first_head_cast_bias_perpendicular(cast_events_data, analysis_type='first'):
+def analyze_head_cast_bias(cast_events_data, analysis_type='first'):
     """
     Analyze bias of head cast direction when larvae are perpendicular to flow.
-    Uses upstream/downstream classification based on bend angle + orientation.
+    Uses already calculated values from detect_head_casts_in_casts.
     
     Args:
         cast_events_data: Output from detect_head_casts_in_casts function
@@ -2030,13 +2187,19 @@ def analyze_first_head_cast_bias_perpendicular(cast_events_data, analysis_type='
     head_cast_data = []
     larva_summaries = []
     
+    print(f"\n🎯 {analysis_type.title()} Head Cast Bias Analysis")
+    print("=" * 60)
+    
+    # Minimum number of perpendicular head casts per larva to include in statistical analysis
+    MIN_CASTS_FOR_STATS = 2  # Adjustable threshold
+    
     for larva_id, cast_events in cast_events_data.items():
         if not cast_events:
             continue
             
-        larva_upstream_count = 0
-        larva_downstream_count = 0
-        larva_total_casts = 0
+        larva_towards_count = 0
+        larva_away_count = 0
+        larva_total_perpendicular_casts = 0
         
         for cast_event in cast_events:
             if not cast_event['head_cast_details']:
@@ -2053,13 +2216,19 @@ def analyze_first_head_cast_bias_perpendicular(cast_events_data, analysis_type='
                 continue
             
             for head_cast in head_casts_to_analyze:
+                # Only include head casts that are perpendicular AND have direction classification
+                if not head_cast['is_perpendicular']:
+                    continue
+                    
                 direction = head_cast['direction']
+                if direction not in ['towards_wind', 'away_from_wind']:
+                    continue
                 
                 # Record the head cast direction
                 cast_data = {
                     'larva_id': larva_id,
                     'cast_orientation': cast_event['cast_start_orientation'],
-                    'head_cast_direction': direction,  # 'upstream' or 'downstream'
+                    'head_cast_direction': direction,
                     'head_cast_amplitude': head_cast['amplitude'],
                     'peak_orientation': head_cast['peak_orientation'],
                     'bend_angle': head_cast['bend_angle'],
@@ -2068,77 +2237,155 @@ def analyze_first_head_cast_bias_perpendicular(cast_events_data, analysis_type='
                 }
                 
                 head_cast_data.append(cast_data)
-                larva_total_casts += 1
+                larva_total_perpendicular_casts += 1
                 
-                if direction == 'upstream':
-                    larva_upstream_count += 1
-                else:
-                    larva_downstream_count += 1
+                if direction == 'towards_wind':
+                    larva_towards_count += 1
+                elif direction == 'away_from_wind':
+                    larva_away_count += 1
         
-        # Store per-larva summary
-        if larva_total_casts > 0:
+        # Store per-larva summary (only if there are perpendicular head casts)
+        if larva_total_perpendicular_casts > 0:
+            larva_bias_towards = larva_towards_count / larva_total_perpendicular_casts
+            larva_bias_away = larva_away_count / larva_total_perpendicular_casts
+            
             larva_summaries.append({
                 'larva_id': larva_id,
-                'upstream_count': larva_upstream_count,
-                'downstream_count': larva_downstream_count,
-                'total_count': larva_total_casts,
-                'upstream_bias': larva_upstream_count / larva_total_casts,
-                'downstream_bias': larva_downstream_count / larva_total_casts
+                'towards_count': larva_towards_count,
+                'away_count': larva_away_count,
+                'total_count': larva_total_perpendicular_casts,
+                'towards_bias': larva_bias_towards,
+                'away_bias': larva_bias_away
             })
+            
+            print(f"Larva {larva_id:2d}: {larva_total_perpendicular_casts:2d} {analysis_type} perpendicular head casts "
+                  f"({larva_towards_count:2d} towards [{larva_bias_towards:.1%}], "
+                  f"{larva_away_count:2d} away [{larva_bias_away:.1%}])")
     
     if not head_cast_data:
+        print("No perpendicular head casts found for analysis.")
         return {
             'head_cast_data': [],
             'larva_summaries': [],
-            'total_upstream': 0,
-            'total_downstream': 0,
+            'total_towards': 0,
+            'total_away': 0,
             'total_casts': 0,
-            'overall_upstream_bias': np.nan,
-            'overall_downstream_bias': np.nan,
-            'p_value_binomial': np.nan,
+            'overall_towards_bias': np.nan,
+            'overall_away_bias': np.nan,
+            'mean_larva_towards_bias': np.nan,
+            'se_larva_towards_bias': np.nan,
+            'mean_larva_away_bias': np.nan,
+            'se_larva_away_bias': np.nan,
+            'p_value_wilcoxon': np.nan,
+            # 'p_value_ttest': np.nan,
+            # 'p_value_fisher_combined': np.nan,
             'n_larvae': 0,
+            'n_larvae_for_stats': 0,
             'analysis_type': analysis_type
         }
     
     # Calculate overall statistics
-    total_upstream = sum(1 for cast in head_cast_data if cast['head_cast_direction'] == 'upstream')
-    total_downstream = sum(1 for cast in head_cast_data if cast['head_cast_direction'] == 'downstream')
+    total_towards = sum(1 for cast in head_cast_data if cast['head_cast_direction'] == 'towards_wind')
+    total_away = sum(1 for cast in head_cast_data if cast['head_cast_direction'] == 'away_from_wind')
     total_casts = len(head_cast_data)
     
-    overall_upstream_bias = total_upstream / total_casts
-    overall_downstream_bias = total_downstream / total_casts
-    
-    # Statistical test: binomial test for bias
-    from scipy.stats import binomtest
-    binom_result = binomtest(total_upstream, total_casts, 0.5, alternative='two-sided')
-    p_value = binom_result.pvalue
+    overall_towards_bias = total_towards / total_casts
+    overall_away_bias = total_away / total_casts
     
     # Per-larva bias statistics
-    larva_upstream_biases = [summary['upstream_bias'] for summary in larva_summaries]
-    larva_downstream_biases = [summary['downstream_bias'] for summary in larva_summaries]
+    larva_towards_biases = [summary['towards_bias'] for summary in larva_summaries]
+    larva_away_biases = [summary['away_bias'] for summary in larva_summaries]
     
-    mean_larva_upstream_bias = np.mean(larva_upstream_biases)
-    se_larva_upstream_bias = stats.sem(larva_upstream_biases)
-    mean_larva_downstream_bias = np.mean(larva_downstream_biases)
-    se_larva_downstream_bias = stats.sem(larva_downstream_biases)
+    mean_larva_towards_bias = np.mean(larva_towards_biases)
+    se_larva_towards_bias = stats.sem(larva_towards_biases)
+    mean_larva_away_bias = np.mean(larva_away_biases)
+    se_larva_away_bias = stats.sem(larva_away_biases)
+    
+    # === STATISTICAL TESTS ===
+    # Filter larvae with sufficient data for robust statistical testing
+    larvae_for_stats = [summary for summary in larva_summaries 
+                       if summary['total_count'] >= MIN_CASTS_FOR_STATS]
+    
+    if len(larvae_for_stats) >= 3:  # Need at least 3 larvae for meaningful stats
+        filtered_towards_biases = [summary['towards_bias'] for summary in larvae_for_stats]
+        
+        # PRIMARY TEST: Wilcoxon signed-rank test (non-parametric)
+        from scipy.stats import wilcoxon
+        # Test if median bias differs from 0.5
+        deviations_from_chance = np.array(filtered_towards_biases) - 0.5
+        if np.any(deviations_from_chance != 0):  # Avoid all-zeros case
+            w_stat, p_wilcoxon = wilcoxon(deviations_from_chance, alternative='two-sided')
+        else:
+            p_wilcoxon = 1.0
+        
+        # # ALTERNATIVE TESTS (commented out)
+        # # 1. One-sample t-test: Are per-larva towards biases significantly different from 0.5?
+        # from scipy.stats import ttest_1samp
+        # t_stat, p_ttest = ttest_1samp(filtered_towards_biases, 0.5)
+        # 
+        # # 2. Per-larva binomial tests combined (Fisher's method)
+        # from scipy.stats import combine_pvalues, binomtest
+        # individual_pvals = []
+        # for summary in larvae_for_stats:
+        #     # Binomial test for each individual larva
+        #     binom_result = binomtest(summary['towards_count'], 
+        #                            summary['total_count'], 
+        #                            0.5, alternative='two-sided')
+        #     individual_pvals.append(binom_result.pvalue)
+        # 
+        # # Combine p-values using Fisher's method
+        # if individual_pvals:
+        #     fisher_stat, p_fisher = combine_pvalues(individual_pvals, method='fisher')
+        # else:
+        #     p_fisher = np.nan
+        
+        print(f"\n📊 Statistical Tests (n={len(larvae_for_stats)} larvae with ≥{MIN_CASTS_FOR_STATS} casts):")
+        print(f"   Wilcoxon signed-rank test: p={p_wilcoxon:.4f}")
+        # print(f"   One-sample t-test vs 0.5: t={t_stat:.3f}, p={p_ttest:.4f}")
+        # print(f"   Combined binomial tests (Fisher): p={p_fisher:.4f}")
+        
+        # Interpretation
+        alpha = 0.05
+        if p_wilcoxon < alpha:
+            direction = "towards" if mean_larva_towards_bias > 0.5 else "away from"
+            print(f"   ✓ Significant bias {direction} wind (Wilcoxon p < {alpha})")
+        else:
+            print(f"   ✗ No significant bias detected (Wilcoxon p ≥ {alpha})")
+            
+    else:
+        print(f"\n⚠️  Insufficient data for robust statistical testing")
+        print(f"   Only {len(larvae_for_stats)} larvae with ≥{MIN_CASTS_FOR_STATS} perpendicular head casts")
+        p_wilcoxon = np.nan
+        # p_ttest = np.nan
+        # p_fisher = np.nan
+    
+    print("-" * 60)
+    print(f"TOTAL: {total_casts} {analysis_type} perpendicular head casts")
+    print(f"Overall: {total_towards} towards [{overall_towards_bias:.1%}], {total_away} away [{overall_away_bias:.1%}]")
+    print(f"Mean across larvae: {mean_larva_towards_bias:.1%} ± {se_larva_towards_bias:.1%} towards, "
+          f"{mean_larva_away_bias:.1%} ± {se_larva_away_bias:.1%} away (n={len(larva_summaries)} larvae)")
     
     return {
         'head_cast_data': head_cast_data,
         'larva_summaries': larva_summaries,
-        'total_upstream': total_upstream,
-        'total_downstream': total_downstream,
+        'larvae_for_stats': larvae_for_stats,
+        'total_towards': total_towards,
+        'total_away': total_away,
         'total_casts': total_casts,
-        'overall_upstream_bias': overall_upstream_bias,
-        'overall_downstream_bias': overall_downstream_bias,
-        'mean_larva_upstream_bias': mean_larva_upstream_bias,
-        'se_larva_upstream_bias': se_larva_upstream_bias,
-        'mean_larva_downstream_bias': mean_larva_downstream_bias,
-        'se_larva_downstream_bias': se_larva_downstream_bias,
-        'p_value_binomial': p_value,
+        'overall_towards_bias': overall_towards_bias,
+        'overall_away_bias': overall_away_bias,
+        'mean_larva_towards_bias': mean_larva_towards_bias,
+        'se_larva_towards_bias': se_larva_towards_bias,
+        'mean_larva_away_bias': mean_larva_away_bias,
+        'se_larva_away_bias': se_larva_away_bias,
+        'p_value_wilcoxon': p_wilcoxon if 'p_wilcoxon' in locals() else np.nan,
+        # 'p_value_ttest': p_ttest if 'p_ttest' in locals() else np.nan,
+        # 'p_value_fisher_combined': p_fisher if 'p_fisher' in locals() else np.nan,
+        'min_casts_threshold': MIN_CASTS_FOR_STATS,
         'n_larvae': len(larva_summaries),
+        'n_larvae_for_stats': len(larvae_for_stats) if 'larvae_for_stats' in locals() else 0,
         'analysis_type': analysis_type
     }
-
 ### NAVIGATIONAL INDEX CALCULATION ###
 def compute_velocity_and_axis(experiments_data):
     """
