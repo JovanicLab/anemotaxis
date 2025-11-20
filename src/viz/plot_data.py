@@ -3142,4 +3142,145 @@ def plot_ni_boxplot_by_date(combined_ni_single, save_path=None):
     return fig
 
 
-
+# Updated function to plot genotype comparisons with head cast support
+def plot_genotype_comparison(genotype_data, analysis_type, plot_style='histogram', ax=None, **kwargs):
+    """Plot comparison of multiple genotypes for a given analysis type."""
+    
+    # Define colors for different analysis types
+    color_map = {
+        'run': 'black',
+        'turn': 'red', 
+        'backup': 'cyan',
+        'velocity': 'black',
+        'turn_amplitude': 'red',
+        'head_cast': 'purple'
+    }
+    
+    # Force purple color for head cast analyses
+    if 'head_cast' in analysis_type or kwargs.get('plot_type') == 'head_cast':
+        base_color = 'purple'
+    elif 'plot_type' in kwargs and kwargs['plot_type'] in color_map:
+        base_color = color_map[kwargs['plot_type']]
+    elif 'color' in kwargs:
+        base_color = kwargs['color']
+    else:
+        # Determine from analysis_type
+        if 'run' in analysis_type:
+            base_color = color_map['run']
+        elif 'turn_prob' in analysis_type:
+            base_color = color_map['turn']
+        elif 'backup' in analysis_type:
+            base_color = color_map['backup']
+        elif 'turn_amp' in analysis_type:
+            base_color = color_map['turn_amplitude']
+        elif 'velocity' in analysis_type:
+            base_color = color_map['velocity']
+        else:
+            base_color = 'black'  # default
+    
+    # Determine plot_type for the plotting functions
+    if 'plot_type' in kwargs:
+        behavior_plot_type = kwargs['plot_type']
+    elif 'run' in analysis_type:
+        behavior_plot_type = 'run'
+    elif 'turn_prob' in analysis_type:
+        behavior_plot_type = 'turn'
+    elif 'backup' in analysis_type:
+        behavior_plot_type = 'backup'
+    elif 'velocity' in analysis_type:
+        behavior_plot_type = 'velocity'
+    elif 'turn_amp' in analysis_type:
+        behavior_plot_type = 'turn_amplitude'
+    elif 'head_cast' in analysis_type:
+        behavior_plot_type = 'head_cast'
+    else:
+        behavior_plot_type = 'run'  # default
+    
+    # Remove conflicting arguments from kwargs
+    clean_kwargs = kwargs.copy()
+    clean_kwargs.pop('plot_type', None)
+    clean_kwargs.pop('color', None)  # Remove color override to use our mapping
+    
+    for i, (genotype_key, data) in enumerate(genotype_data.items()):
+        if analysis_type not in data or not data[analysis_type]:
+            continue
+            
+        style = data['metadata']['style']
+        label = data['metadata']['label']
+        
+        # Create plot-specific kwargs
+        if plot_style == 'histogram':
+            plot_kwargs = {
+                **style, 
+                'label': label, 
+                'color': base_color,
+                'plot_type': behavior_plot_type,
+                **clean_kwargs
+            }
+                
+            plot_orientation_histogram(
+                data[analysis_type], 
+                ax=ax, 
+                **plot_kwargs
+            )
+            
+        elif plot_style == 'time_series':
+            plot_kwargs = {
+                **style, 
+                'label': label, 
+                'color': base_color,
+                'plot_type': behavior_plot_type,
+                **clean_kwargs
+            }
+                
+            plot_metric_over_time(
+                data[analysis_type], 
+                ax=ax, 
+                **plot_kwargs
+            )
+            
+        elif plot_style == 'polar':
+            # For polar plots, use alpha differences only (no color differences)
+            alpha_values = [0.8, 0.5]  # First genotype more opaque, second more transparent
+            alpha = alpha_values[i] if i < len(alpha_values) else 0.3
+            
+            # Extract only the parameters that plot_orientation_histogram_polar accepts
+            polar_kwargs = {
+                k: v for k, v in clean_kwargs.items() 
+                if k in ['min_amplitude', 'ylim']
+            }
+            
+            # Add polar-specific parameters
+            polar_kwargs.update({
+                'plot_type': behavior_plot_type,
+                'bar_style': True,
+                'tick_fontsize': 10,
+                'se_alpha': alpha,
+                'label': label,
+                'color': base_color
+            })
+            
+            plot_orientation_histogram_polar(
+                data[analysis_type], 
+                ax=ax,
+                **polar_kwargs
+            )
+    
+    # Add legend for histogram and time_series plots
+    if ax and plot_style in ['histogram', 'time_series']:
+        ax.legend()
+    
+    # Add legend for polar plots if there are multiple genotypes
+    elif ax and plot_style == 'polar' and len(genotype_data) > 1:
+        from matplotlib.patches import Patch
+        legend_elements = []
+        alpha_values = [0.8, 0.5]
+        
+        for i, (genotype_key, data) in enumerate(genotype_data.items()):
+            if analysis_type in data and data[analysis_type]:
+                alpha = alpha_values[i] if i < len(alpha_values) else 0.3
+                label = data['metadata']['label']
+                legend_elements.append(Patch(facecolor=base_color, alpha=alpha, label=label))
+        
+        if legend_elements:
+            ax.legend(handles=legend_elements, loc='upper right', bbox_to_anchor=(1.3, 1.0))

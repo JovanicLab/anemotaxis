@@ -163,21 +163,27 @@ def load_single_trx_file(file_path, show_progress=False):
             
             # Extract data for each larva
             extracted_data = {}
+            import time
+            start_time = time.time()
             progress_iter = tqdm(range(n_larvae), desc="Processing larvae", disable=not show_progress)
-            
+
             for larva_idx in progress_iter:
                 try:
                     larva_data = _extract_larva_data(f, larva_idx)
-                    
                     # Only include larvae with valid behavior data
                     if _is_valid_larva(larva_data):
                         larva_id = larva_data['larva_id']
                         extracted_data[larva_id] = larva_data
-                    
                 except Exception as e:
                     if show_progress:
                         tqdm.write(f"Error processing larva {larva_idx}: {e}")
                     continue
+            if show_progress:
+                end_time = time.time()
+                completed_at = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_time))
+                time_taken = end_time - start_time
+                mins, secs = divmod(int(time_taken), 60)
+                tqdm.write(f"Processing larvae: 100% | {n_larvae}/{n_larvae} | Completed at: {completed_at} | Time taken: {mins:02d}:{secs:02d}")
             
             # Prepare metadata
             date_str = _get_date_from_path(file_path)
