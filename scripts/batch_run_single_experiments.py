@@ -78,3 +78,83 @@ if __name__ == "__main__":
         print(f"\n🚀 \033[1;34m[{i+1}/{total}]\033[0m Processing: \033[1m{single_path}\033[0m")
         execute_and_export(input_nb, pdf_path, params)
         print(f"✅ \033[92mFinished {i+1}/{total}\033[0m\n{'-'*60}")
+
+
+# # The following code was used to generate the input text files with paths
+# # for the batch processing script above. It is commented out as it is not part
+# # of the main functionality but may be useful for reference.
+# import os
+# import re
+
+# root_dir = "/Volumes/eq-jovanic/Personal_folders/Iara/Beh_Data/final_analysis"
+# output_file_300 = "iara_trx_mat_path_t7_x300s.txt"
+# output_file_420 = "iara_trx_mat_path_t7_x420s.txt"
+# prefix = "/Users/sharbat/Projects/anemotaxis/data/t7"
+
+# def is_date_folder(name):
+#     return len(name) == 15 and name[:8].isdigit() and name[8] == '_' and name[9:].isdigit()
+
+# paths_300 = []
+# paths_420 = []
+
+# for dirpath, dirnames, filenames in os.walk(root_dir):
+#     for dirname in dirnames:
+#         if is_date_folder(dirname):
+#             date_folder = os.path.join(dirpath, dirname)
+#             files = [f for f in os.listdir(date_folder) if os.path.isfile(os.path.join(date_folder, f))]
+#             if files:
+#                 for f in files:
+#                     m = re.match(r"^\d{8}_\d{6}@(.*?)@t\d+@(.*?)@", f)
+#                     if m:
+#                         genotype = m.group(1)
+#                         protocol = m.group(2)
+#                         # Compose the new path
+#                         trx_path = os.path.join(
+#                             prefix,
+#                             genotype,
+#                             protocol,
+#                             dirname,
+#                             "trx.mat"
+#                         )
+                        
+#                         if "x300s" in protocol:
+#                             paths_300.append(trx_path)
+#                         elif "x420s" in protocol:
+#                             paths_420.append(trx_path)
+                            
+#                         break  # Only one file per date folder
+
+# with open(output_file_300, "w") as f:
+#     for p in paths_300:
+#         f.write(p + "\n")
+
+# with open(output_file_420, "w") as f:
+#     for p in paths_420:
+#         f.write(p + "\n")
+
+# print(f"Written {len(paths_300)} paths to {output_file_300}")
+# print(f"Written {len(paths_420)} paths to {output_file_420}")
+# import os
+
+# # List of root folders to search
+# root_folders = [
+#     "/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus",
+#     "/Users/sharbat/Projects/anemotaxis/data/t7/Orco-GAL4_W11_17@20XUAS_CsChrimsom_mVenus",
+#     "/Users/sharbat/Projects/anemotaxis/data/t7/Or42a-GAL4_F48_1@20XUAS_CsChrimsom_mVenus",
+#     "/Users/sharbat/Projects/anemotaxis/data/t7/W1118@20XUAS_CsChrimsom_mVenus"
+# ]
+
+# trx_mat_paths = []
+
+# for root in root_folders:
+#     for dirpath, dirnames, filenames in os.walk(root):
+#         if "trx.mat" in filenames:
+#             trx_mat_paths.append(os.path.join(dirpath, "trx.mat"))
+
+# # Write all paths to a text file
+# output_file = "all_trx_mat_path_t7.txt"
+# with open(output_file, "w") as f:
+#     for path in trx_mat_paths:
+#         f.write(path + "\n")
+
+# print(f"Found {len(trx_mat_paths)} trx.mat files. Paths written to {output_file}")
