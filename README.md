@@ -147,6 +147,28 @@ The analysis generates:
 - **HDF5 files**: Processed data and analysis results
 - **Statistical summaries**: Printed to console and saved in results
 
+## Batch Processing Workflow
+
+To analyze multiple single-path experiments, use the batch script:
+
+```bash
+python scripts/batch_run_single_experiments.py --paths_file /path/to/your_paths.txt
+```
+
+This will execute the parameterized notebook (`analyze_single_anemotaxis.ipynb`) for each path in the file, saving results and PDFs in the corresponding `analyses` subfolder.
+
+**Note:** You can generate the paths file using the provided scripts or by listing all `trx.mat` files you wish to process.
+
+## Requirements
+
+- Check out the `envionment.yml` and `pyproject.toml` file for the requirements.
+- **xelatex** (required for PDF export)
+  - On macOS, install MacTeX or BasicTeX, which provides xelatex. Make sure `/Library/TeX/texbin` is in your PATH.
+  - On Linux, install with `sudo apt-get install texlive-xetex`.
+  - On Windows, install MikTeX or TeX Live and ensure xelatex is on your PATH.
+
+If you see an error like `OSError: xelatex not found on PATH`, install xelatex and restart your terminal/session.
+
 ## Citation
 
 If you use this package in your research, please cite:
