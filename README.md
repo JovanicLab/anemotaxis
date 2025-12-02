@@ -180,8 +180,8 @@ If you use this package in your research, please cite:
   year = {2025},
   publisher = {GitHub},
   journal = {GitHub repository},
-  howpublished = {\url{https://github.com/sharbatc/anemotaxis}},
-  note = {Version 1.0.0}
+  howpublished = {\url{https://github.com/JovanicLab/anemotaxis}},
+  note = {Version 2.1}
 }
 ```
 **For Word/Google Docs:**
