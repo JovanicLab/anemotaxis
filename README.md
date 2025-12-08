@@ -187,7 +187,7 @@ If you use this package in your research, please cite:
 **For Word/Google Docs:**
 Plain text citation format:
 ```
-Chatterjee, S. (2025). Anemotaxis Analysis: A Python package for analyzing larval anemotaxis behavior from trajectory data (Version 0.1.0) [analysis software]. GitHub. https://github.com/sharbatc/anemotaxis
+Chatterjee, S. (2025). Anemotaxis Analysis: A Python package for analyzing larval anemotaxis behavior from trajectory data (Version 0.1.0) [analysis software]. GitHub. https://github.com/JovanicLab/anemotaxis
 ```
 
 <!-- ## Contributing

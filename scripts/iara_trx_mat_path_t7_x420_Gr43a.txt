@@ -1,0 +1,14 @@
+/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus/ch_95grad_2s1x420s0s#p_5gradient2_2s1x420s0s#n#n/20240517_142731/trx.mat
+/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus/ch_95grad_2s1x420s0s#p_5gradient2_2s1x420s0s#n#n/20240524_111440/trx.mat
+/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus/ch_95grad_2s1x420s0s#p_5gradient2_2s1x420s0s#n#n/20240610_114558/trx.mat
+/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus/ch_95grad_2s1x420s0s#p_5gradient2_2s1x420s0s#n#n/20240617_121535/trx.mat
+/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus/ch_95grad_2s1x420s0s#p_5gradient2_2s1x420s0s#n#n/20240621_112433/trx.mat
+/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus/ch_95grad_2s1x420s0s#p_5gradient2_2s1x420s0s#n#n/20240624_135221/trx.mat
+/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus/ch_95grad_2s1x420s0s#p_5gradient2_2s1x420s0s#n#n/20240712_140417/trx.mat
+/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus/ch_95grad_2s1x420s0s#p_5gradient2_2s1x420s0s#n#n/20240712_142630/trx.mat
+/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus/ch_95grad_2s1x420s0s#p_5gradient2_2s1x420s0s#n#n/20240715_142749/trx.mat
+/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus/ch_95grad_2s1x420s0s#p_5gradient2_2s1x420s0s#n#n/20240715_145136/trx.mat
+/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus/ch_95grad_2s1x420s0s#p_5gradient2_2s1x420s0s#n#n/20240718_144513/trx.mat
+/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus/ch_95grad_2s1x420s0s#p_5gradient2_2s1x420s0s#n#n/20240718_150817/trx.mat
+/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus/ch_95grad_2s1x420s0s#p_5gradient2_2s1x420s0s#n#n/20240719_124755/trx.mat
+/Users/sharbat/Projects/anemotaxis/data/t7/Gr43a-GAL4@20XUAS_CsChrimsom_mVenus/ch_95grad_2s1x420s0s#p_5gradient2_2s1x420s0s#n#n/20240719_131025/trx.mat

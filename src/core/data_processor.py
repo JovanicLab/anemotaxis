@@ -28,19 +28,22 @@ from scipy import stats
 # oriented with or against the flow.
 # =============================================================================
 
-def compute_orientation_tail_to_neck_wrt_negative_x(x_tail, y_tail, x_neck, y_neck):
+def compute_orientation_tail_to_neck(x_tail, y_tail, x_point, y_point, ref_vector=(-1, 0)):
     """
-    Compute orientation angle between tail-to-neck vector and negative x-axis.
-    Returns angle in degrees, where 0° = facing -x (downstream), ±180° = +x (upstream).
+    Compute orientation angle between tail-to-point vector and a reference direction.
+    ref_vector: tuple, e.g. (-1, 0) for -X, (0, -1) for -Y
+    Returns angle in degrees, where 0° = facing ref_vector.
     """
-    v_x = x_neck - x_tail
-    v_y = y_neck - y_tail
-    angle_rad = np.arctan2(v_y, -v_x)  # -v_x for -x axis
+    v_x = x_point - x_tail
+    v_y = y_point - y_tail
+    # Reference direction
+    ref_x, ref_y = ref_vector
+    angle_rad = np.arctan2(v_y, v_x) - np.arctan2(ref_y, ref_x)
     angle_deg = np.degrees(angle_rad)
     angle_deg = (angle_deg + 180) % 360 - 180
     return angle_deg
 
-def get_larva_orientation_array(larva_data):
+def get_larva_orientation_array(larva_data, ref_vector=(-1, 0)):
     """
     Always compute orientation as tail-to-neck relative to -x axis.
     Returns None if required keys are missing.
@@ -52,8 +55,8 @@ def get_larva_orientation_array(larva_data):
         x_neck = np.array(larva_data['x_neck']).flatten()
         y_neck = np.array(larva_data['y_neck']).flatten()
         min_len = min(len(x_tail), len(y_tail), len(x_neck), len(y_neck))
-        return compute_orientation_tail_to_neck_wrt_negative_x(
-            x_tail[:min_len], y_tail[:min_len], x_neck[:min_len], y_neck[:min_len]
+        return compute_orientation_tail_to_neck(
+            x_tail[:min_len], y_tail[:min_len], x_neck[:min_len], y_neck[:min_len], ref_vector=ref_vector
         )
     return None
 

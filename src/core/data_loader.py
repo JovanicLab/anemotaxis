@@ -668,7 +668,17 @@ def combine_analysis_results(result_files, analysis_type):
     
     # Time series metric data
     if all_metric_arrays:
-        combined_metric_arrays = np.concatenate(all_metric_arrays, axis=0)
+        # Pad arrays to the same length along axis 1 before concatenation
+        target_length = max(arr.shape[1] for arr in all_metric_arrays)
+        aligned_arrays = []
+        for arr in all_metric_arrays:
+            if arr.shape[1] == target_length:
+                aligned_arrays.append(arr)
+            else:
+                pad_width = target_length - arr.shape[1]
+                arr_padded = np.pad(arr, ((0,0),(0,pad_width)), mode='constant', constant_values=np.nan)
+                aligned_arrays.append(arr_padded)
+        combined_metric_arrays = np.concatenate(aligned_arrays, axis=0)
         combined_result.update({
             'metric_arrays': combined_metric_arrays,
             'mean_metric': np.nanmean(combined_metric_arrays, axis=0),
@@ -677,8 +687,7 @@ def combine_analysis_results(result_files, analysis_type):
             'n_larvae': len(combined_metric_arrays)
         })
     
-    # Head cast bias analysis - Fixed version
-    # Head cast bias analysis - CORRECTED version
+    # Head cast bias analysis
     if all_larva_summaries:
         # Recalculate combined statistics from all larva summaries
         combined_towards_biases = []

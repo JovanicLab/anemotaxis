@@ -1132,7 +1132,6 @@ def plot_orientation_histogram(analysis_results, ax=None, show_plot=True, linest
 
     return ax
 
-
 def plot_orientation_histogram_polar(analysis_results, ax=None, show_plot=True, 
                                    show_se=True, se_alpha=0.3, color=None, label=None,
                                    title=None, bar_style=True, tick_fontsize=8, n_radial_ticks=3,
@@ -1182,88 +1181,68 @@ def plot_orientation_histogram_polar(analysis_results, ax=None, show_plot=True,
     
     # For turn amplitude, apply minimum amplitude filter AND ensure we have valid data
     if is_amplitude and min_amplitude is not None:
-        # For amplitude data, we need to handle this differently
-        # Instead of filtering out data, set values below threshold to NaN
         filtered_mean = mean_hist.copy()
         filtered_se = se_hist.copy()
-        
-        # Set values below threshold to NaN instead of removing them
         below_threshold = mean_hist < min_amplitude
         filtered_mean[below_threshold] = np.nan
         filtered_se[below_threshold] = np.nan
-        
-        # Also filter out originally NaN values
         originally_nan = np.isnan(mean_hist)
-        
-        # Check if we have any valid data after filtering
         valid_data_mask = ~(below_threshold | originally_nan)
-        
         if not np.any(valid_data_mask):
             ax.text(0, 0, f"No valid {plot_type} data available\n(min amplitude: {min_amplitude}°)", 
                     ha='center', va='center', transform=ax.transAxes, fontsize=10)
             return ax
-            
-        # Use filtered data but keep original bin structure
         plot_mean = filtered_mean
         plot_se = filtered_se
         plot_bins = bin_centers
-        
     else:
-        # For non-amplitude data, just handle NaN values
+        originally_nan = np.isnan(mean_hist)
         plot_mean = mean_hist
         plot_se = se_hist
         plot_bins = bin_centers
-        
-        # Check for any valid data
         if np.all(np.isnan(plot_mean)):
             ax.text(0, 0, "No valid orientation data available", 
                     ha='center', va='center', transform=ax.transAxes, fontsize=10)
             return ax
-    
+
     # Convert ALL bins to radians (keep the full structure)
     theta = np.deg2rad(plot_bins)
-    
     # Calculate bin width using original bin spacing
     if len(bin_centers) > 1:
         bin_width_deg = bin_centers[1] - bin_centers[0]
     else:
         bin_width_deg = 20  # Default fallback
-    
     bin_width_rad = np.deg2rad(bin_width_deg)
 
     if bar_style:
-        # Plot ALL bars, including NaN ones (they will be invisible)
-        bars = ax.bar(theta, plot_mean, width=bin_width_rad, 
-                     color=color, alpha=0.7, edgecolor='black', linewidth=0.5)
-        
+        # Only plot bars for bins with valid (finite) data
+        valid_mask = np.isfinite(plot_mean)
+        theta_valid = theta[valid_mask]
+        plot_mean_valid = plot_mean[valid_mask]
+        bars = ax.bar(theta_valid, plot_mean_valid, width=bin_width_rad,
+                      color=color, alpha=0.7, edgecolor='black', linewidth=0.5)
+        # Plot zero-height bars for bins with NaN (optional: skip or annotate)
+        # If you want to show zero-height bars for missing bins, uncomment below:
+        # zero_mask = ~valid_mask
+        # if np.any(zero_mask):
+        #     ax.bar(theta[zero_mask], np.zeros_like(theta[zero_mask]), width=bin_width_rad,
+        #            color=color, alpha=0.2, edgecolor='gray', linewidth=0.5)
         # Plot standard error only for valid (non-NaN) values
         if show_se and n_subjects > 1 and len(plot_se) > 0:
             for i, (th, mean_val, se_val) in enumerate(zip(theta, plot_mean, plot_se)):
-                # Only plot error bars for finite values
                 if np.isfinite(mean_val) and np.isfinite(se_val) and se_val > 0:
                     upper_bound = mean_val + se_val
                     lower_bound = mean_val - se_val
-                    
-                    # Plot error bar line
-                    ax.plot([th, th], [lower_bound, upper_bound], 
-                           color=color, linewidth=1.5, alpha=0.8)
-                    
-                    # Plot caps
                     cap_width = bin_width_rad * 0.3
-                    ax.plot([th - cap_width/2, th + cap_width/2], 
-                           [upper_bound, upper_bound], 
-                           color=color, linewidth=1.5, alpha=0.8)
-                    ax.plot([th - cap_width/2, th + cap_width/2], 
-                           [lower_bound, lower_bound], 
-                           color=color, linewidth=1.5, alpha=0.8)
+                    ax.plot([th, th], [lower_bound, upper_bound], color=color, linewidth=1.5, alpha=0.8)
+                    ax.plot([th - cap_width/2, th + cap_width/2], [upper_bound, upper_bound], color=color, linewidth=1.5, alpha=0.8)
+                    ax.plot([th - cap_width/2, th + cap_width/2], [lower_bound, lower_bound], color=color, linewidth=1.5, alpha=0.8)
     else:
-        # For line plots, filter out NaN values
         valid_mask = np.isfinite(plot_mean)
         if np.any(valid_mask):
             valid_theta = theta[valid_mask]
             valid_mean = plot_mean[valid_mask]
             valid_se = plot_se[valid_mask] if len(plot_se) > 0 else []
-            
             ax.plot(valid_theta, valid_mean, color=color, linewidth=2, label=label)
             if show_se and len(valid_se) > 0:
                 ax.fill_between(valid_theta, valid_mean - valid_se, valid_mean + valid_se,
@@ -1275,37 +1254,32 @@ def plot_orientation_histogram_polar(analysis_results, ax=None, show_plot=True,
     
     # Set radial limits based on data type - use only valid data for scaling
     if is_amplitude or plot_type == 'turn_amplitude':
-        # For amplitude data, start from min_amplitude and adjust maximum
-        valid_data = plot_mean[np.isfinite(plot_mean)]
-        valid_se_data = plot_se[np.isfinite(plot_se)] if len(plot_se) > 0 else []
-        
+        valid_mask = np.isfinite(plot_mean) & np.isfinite(plot_se)
+        valid_data = plot_mean[valid_mask]
+        valid_se_data = plot_se[valid_mask]
         if len(valid_data) > 0:
             if len(valid_se_data) > 0:
-                data_max = np.nanmax(valid_data + valid_se_data[np.isfinite(valid_se_data)])
+                data_max = np.nanmax([np.nanmax(valid_data), np.nanmax(valid_data + valid_se_data)])
             else:
                 data_max = np.nanmax(valid_data)
         else:
             data_max = min_amplitude if min_amplitude is not None else 180
-            
         y_min = min_amplitude if min_amplitude is not None else 60
         r_max = max(180, np.ceil(data_max / 10) * 10)  # Round up to nearest 10°, min 180°
         ax.set_ylim(y_min, r_max)
     else:
-        # For probability data, start from 0
-        valid_data = plot_mean[np.isfinite(plot_mean)]
-        valid_se_data = plot_se[np.isfinite(plot_se)] if len(plot_se) > 0 else []
-        
+        valid_mask = np.isfinite(plot_mean) & np.isfinite(plot_se)
+        valid_data = plot_mean[valid_mask]
+        valid_se_data = plot_se[valid_mask]
         if len(valid_data) > 0:
             if len(valid_se_data) > 0:
-                r_max = np.nanmax(valid_data + valid_se_data[np.isfinite(valid_se_data)])
+                r_max = np.nanmax([np.nanmax(valid_data), np.nanmax(valid_data + valid_se_data)])
             else:
                 r_max = np.nanmax(valid_data)
         else:
             r_max = 1.0  # Default safe value
-            
         if np.isnan(r_max) or r_max <= 0:
             r_max = 1.0
-            
         r_max_rounded = np.ceil(r_max * 100) / 100  # Round up to nearest 0.01
         ax.set_ylim(0, r_max_rounded)
         r_max = r_max_rounded
@@ -1313,28 +1287,23 @@ def plot_orientation_histogram_polar(analysis_results, ax=None, show_plot=True,
     # Customize radial ticks
     if n_radial_ticks > 0:
         if is_amplitude or plot_type == 'turn_amplitude':
-            # For amplitudes, use 20° or 30° intervals
             y_min = min_amplitude if min_amplitude is not None else 60
             if r_max <= 120:
                 tick_interval = 20
             else:
                 tick_interval = 30
-            # Start from the first tick at or above y_min
             first_tick = np.ceil(y_min / tick_interval) * tick_interval
             n_ticks = min(n_radial_ticks, int((r_max - first_tick) / tick_interval) + 1)
             radial_ticks = np.arange(first_tick, first_tick + n_ticks * tick_interval, tick_interval)
         else:
-            # For probabilities
             if r_max <= 0.10:
                 tick_interval = 0.02
             elif r_max <= 0.30:
                 tick_interval = 0.05
             else:
                 tick_interval = 0.10
-                
             n_ticks = min(n_radial_ticks, int(r_max / tick_interval))
             radial_ticks = np.arange(tick_interval, (n_ticks + 1) * tick_interval, tick_interval)
-        
         ax.set_rticks(radial_ticks)
     else:
         ax.set_rticks([])
@@ -1345,11 +1314,7 @@ def plot_orientation_histogram_polar(analysis_results, ax=None, show_plot=True,
                      fontsize=tick_fontsize)
     ax.tick_params(axis='x', labelsize=tick_fontsize, pad=3)
     ax.tick_params(axis='y', labelsize=tick_fontsize-1)
-    
-    # Set radial label position to avoid overlap
     ax.set_rlabel_position(135)
-    
-    # Add grid with limited radial lines
     ax.grid(True, alpha=0.3)
 
     if title:
