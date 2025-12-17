@@ -64,7 +64,7 @@ def get_larva_orientation_array(larva_data, ref_vector=(-1, 0)):
 ### ORIENTATION ANALYSIS FUNCTIONS
 ### =============================================================================
 
-def analyze_run_orientations(experiments_data, bin_width=10, sigma=2):
+def analyze_run_orientations(experiments_data, bin_width=10, sigma=2, ref_vector=(-1, 0)):
     """
     Analyze run orientations using tail-to-neck orientation definition with standard error across larvae.
     
@@ -98,7 +98,7 @@ def analyze_run_orientations(experiments_data, bin_width=10, sigma=2):
             if runs.sum() == 0:
                 continue
 
-            orientations = get_larva_orientation_array(larva_data)
+            orientations = get_larva_orientation_array(larva_data, ref_vector=ref_vector)
             if orientations is None:
                 continue
                 
@@ -149,7 +149,7 @@ def analyze_run_orientations(experiments_data, bin_width=10, sigma=2):
         'n_larvae': len(larva_orientations)
     }
 
-def analyze_run_probability_by_orientation(experiments_data, bin_width=10, sigma=2):
+def analyze_run_probability_by_orientation(experiments_data, bin_width=10, sigma=2, ref_vector=(-1, 0)):
     """
     Analyze run probability vs. orientation using tail-to-neck orientation.
     Returns analysis results that can be plotted with plot_orientation_histogram.
@@ -169,7 +169,7 @@ def analyze_run_probability_by_orientation(experiments_data, bin_width=10, sigma
 
             is_run = states == 1 # Define runs as large runs (1) CHECK IF YOU WANT TO INCLUDE SMALL RUNS (0.5)
 
-            orientations = get_larva_orientation_array(larva_data)
+            orientations = get_larva_orientation_array(larva_data, ref_vector=ref_vector)
             if orientations is None:
                 continue
             min_len = min(len(orientations), len(is_run))
@@ -230,7 +230,7 @@ def analyze_run_probability_by_orientation(experiments_data, bin_width=10, sigma
         'n_larvae': len(larva_orientations)
     }
 
-def analyze_backup_probability_by_orientation(experiments_data, bin_width=10, sigma=2):
+def analyze_backup_probability_by_orientation(experiments_data, bin_width=10, sigma=2, ref_vector=(-1, 0)):
     """
     Analyze backup probability vs. orientation using tail-to-neck orientation.
     Returns analysis results that can be plotted with plot_orientation_histogram.
@@ -250,7 +250,7 @@ def analyze_backup_probability_by_orientation(experiments_data, bin_width=10, si
 
             is_backup = states == 5  # Define backups as backward runs (5)
 
-            orientations = get_larva_orientation_array(larva_data)
+            orientations = get_larva_orientation_array(larva_data, ref_vector=ref_vector)
             if orientations is None:
                 continue
             min_len = min(len(orientations), len(is_backup))
@@ -311,7 +311,7 @@ def analyze_backup_probability_by_orientation(experiments_data, bin_width=10, si
         'n_larvae': len(larva_orientations)
     }
 
-def analyze_turn_rate_by_orientation(experiments_data, bin_width=10, sigma=3, min_turn_amplitude=45):
+def analyze_turn_rate_by_orientation(experiments_data, bin_width=10, sigma=3, min_turn_amplitude=45, ref_vector=(-1, 0)):
     """
     Analyze turn rate vs. orientation using tail-to-neck orientation.
     A turn is defined as a cast (state==2 or state==1.5, but check) that results in an orientation change >= min_turn_amplitude (deg).
@@ -332,7 +332,7 @@ def analyze_turn_rate_by_orientation(experiments_data, bin_width=10, sigma=3, mi
             states = np.array(larva_data['global_state_small_large_state']).flatten()
             t = np.array(larva_data['t']).flatten()
 
-            orientations = get_larva_orientation_array(larva_data)
+            orientations = get_larva_orientation_array(larva_data, ref_vector=ref_vector)
             if orientations is None:
                 continue
                 
@@ -449,7 +449,7 @@ def analyze_turn_rate_by_orientation(experiments_data, bin_width=10, sigma=3, mi
 ### The following is a calculation of turn probability that marks all frames in a turning cast as "turn" frames.
 ### This is consistent with how run and backup probabilities are calculated.
 
-def analyze_turn_probability_by_orientation(experiments_data, bin_width=10, sigma=2, min_turn_amplitude=45, output_dir=None):
+def analyze_turn_probability_by_orientation(experiments_data, bin_width=10, sigma=2, min_turn_amplitude=45, output_dir=None, ref_vector=(-1,0)):
     """
     Analyze turn probability vs. orientation using tail-to-neck orientation.
     Print only summary statistics; write detailed cast/turn info to a file in output_dir.
@@ -475,7 +475,7 @@ def analyze_turn_probability_by_orientation(experiments_data, bin_width=10, sigm
                 continue
             states = np.array(larva_data['global_state_small_large_state']).flatten()
             times = np.array(larva_data['t']).flatten()
-            orientations = get_larva_orientation_array(larva_data)
+            orientations = get_larva_orientation_array(larva_data, ref_vector=ref_vector)
             if orientations is None:
                 continue
             min_len = min(len(orientations), len(states), len(times))
@@ -750,7 +750,7 @@ def analyze_turn_probability_by_orientation(experiments_data, bin_width=10, sigm
 #         'bin_centers': bin_centers,
 #         'n_larvae': len(larva_orientations)
 #     }
-def analyze_cast_probability_by_orientation(experiments_data, bin_width=10, sigma=2):
+def analyze_cast_probability_by_orientation(experiments_data, bin_width=10, sigma=2, ref_vector = (-1, 0)):
     """
     Analyze cast probability vs. orientation using tail-to-neck orientation.
     Returns analysis results that can be plotted with plot_orientation_histogram.
@@ -770,7 +770,7 @@ def analyze_cast_probability_by_orientation(experiments_data, bin_width=10, sigm
 
             is_cast = states == 2  # Define casts as large casts (2) - CHECK IF YOU WANT TO INCLUDE SMALL CASTS (1.5)
 
-            orientations = get_larva_orientation_array(larva_data)
+            orientations = get_larva_orientation_array(larva_data, ref_vector=ref_vector)
             if orientations is None:
                 continue
             min_len = min(len(orientations), len(is_cast))
@@ -831,7 +831,7 @@ def analyze_cast_probability_by_orientation(experiments_data, bin_width=10, sigm
         'n_larvae': len(larva_orientations)
     }
 
-def analyze_turn_amplitudes_by_orientation(experiments_data, bin_width=10, sigma=1, min_turn_amplitude=60):
+def analyze_turn_amplitudes_by_orientation(experiments_data, bin_width=10, sigma=1, min_turn_amplitude=45, ref_vector = (-1, 0)):
     """
     Analyze turn amplitudes vs. orientation using tail-to-neck orientation.
     A turn is defined as a cast that results in an orientation change >= min_turn_amplitude (deg).
@@ -851,7 +851,7 @@ def analyze_turn_amplitudes_by_orientation(experiments_data, bin_width=10, sigma
                 continue
             states = np.array(larva_data['global_state_small_large_state']).flatten()
 
-            orientations = get_larva_orientation_array(larva_data)
+            orientations = get_larva_orientation_array(larva_data, ref_vector=ref_vector)
             if orientations is None:
                 continue
                 
@@ -995,7 +995,7 @@ def analyze_turn_amplitudes_by_orientation(experiments_data, bin_width=10, sigma
 
 # The following is the per larva histogram approach
 
-def analyze_run_velocity_by_orientation(experiments_data, bin_width=10, sigma=2):
+def analyze_run_velocity_by_orientation(experiments_data, bin_width=10, sigma=2, ref_vector = (-1, 0)):
     """
     Analyze velocity by orientation ONLY during run states (states == 1.0 or 0.5).
     Uses tail-to-neck orientation and motion_velocity_norm_smooth_5.
@@ -1037,7 +1037,7 @@ def analyze_run_velocity_by_orientation(experiments_data, bin_width=10, sigma=2)
             velocity = np.array(larva_data['motion_velocity_norm_smooth_5']).flatten()
 
             # Get orientations using tail-to-neck
-            orientations = get_larva_orientation_array(larva_data)
+            orientations = get_larva_orientation_array(larva_data, ref_vector=ref_vector)
             if orientations is None:
                 continue
 
@@ -1132,7 +1132,7 @@ def analyze_run_velocity_by_orientation(experiments_data, bin_width=10, sigma=2)
     }
 
 # The following is the pooled approach for run velocity by orientation
-def analyze_run_velocity_by_orientation_pooled(experiments_data, bin_width=10, sigma=2):
+def analyze_run_velocity_by_orientation_pooled(experiments_data, bin_width=10, sigma=2, ref_vector = (-1, 0)):
     """
     Analyze velocity by orientation ONLY during run states (states == 1.0 or 0.5).
     Uses tail-to-neck orientation and motion_velocity_norm_smooth_5.
@@ -1177,7 +1177,7 @@ def analyze_run_velocity_by_orientation_pooled(experiments_data, bin_width=10, s
             velocity = np.array(larva_data['motion_velocity_norm_smooth_5']).flatten()
 
             # Get orientations using tail-to-neck
-            orientations = get_larva_orientation_array(larva_data)
+            orientations = get_larva_orientation_array(larva_data, ref_vector=ref_vector)
             if orientations is None:
                 continue
 
@@ -1630,7 +1630,7 @@ def analyze_run_probability_over_time(experiments_data, window=20, step=10):
         'n_larvae': len(metric_arrays)
     }
 
-def analyze_turn_probability_over_time(experiments_data, window=60, step=10, min_turn_amplitude=60):
+def analyze_turn_probability_over_time(experiments_data, window=60, step=10, min_turn_amplitude=45, ref_vector = (-1,0)):
     """
     Analyze turn probability over time for each larva individually, then compute mean and SEM.
     A turn is defined as a cast that results in an orientation change >= min_turn_amplitude (deg).
@@ -1680,7 +1680,7 @@ def analyze_turn_probability_over_time(experiments_data, window=60, step=10, min
         states = np.array(larva['global_state_small_large_state']).flatten()
         
         # Get orientations for this larva
-        orientations = get_larva_orientation_array(larva)
+        orientations = get_larva_orientation_array(larva, ref_vector=ref_vector)
         if orientations is None:
             continue
             
@@ -1847,7 +1847,7 @@ def analyze_backup_probability_over_time(experiments_data, window=60, step=10):
         'n_larvae': len(metric_arrays)
     }
 
-def analyze_turn_amplitudes_over_time(experiments_data, window=60, step=10, min_turn_amplitude=45):
+def analyze_turn_amplitudes_over_time(experiments_data, window=60, step=10, min_turn_amplitude=45, ref_vector = (-1,0)):
     """
     Analyze turn amplitudes over time for each larva individually, then compute mean and SEM.
     A turn is defined as a cast that results in an orientation change >= min_turn_amplitude (deg).
@@ -1898,7 +1898,7 @@ def analyze_turn_amplitudes_over_time(experiments_data, window=60, step=10, min_
         states = np.array(larva['global_state_small_large_state']).flatten()
         
         # Get orientations for this larva
-        orientations = get_larva_orientation_array(larva)
+        orientations = get_larva_orientation_array(larva, ref_vector=ref_vector)
         if orientations is None:
             continue
             
@@ -2194,7 +2194,9 @@ def detect_head_casts_in_casts(
     smooth_sigma=4.0,
     large_casts_only=True,
     min_turn_amplitude=45,
-    print_summary=False
+    print_summary=False,
+    ref_vector = (-1, 0),
+    perp_range = 20
 ):
     """
     Detect ALL head casts during cast events and classify them as towards/away from wind only when perpendicular.
@@ -2258,7 +2260,7 @@ def detect_head_casts_in_casts(
             states = np.array(larva_data['global_state_small_large_state']).flatten()
             head_angles = np.array(larva_data['angle_upper_lower_smooth_5']).flatten()
             t = np.array(larva_data['t']).flatten()
-            orientations = get_larva_orientation_array(larva_data)
+            orientations = get_larva_orientation_array(larva_data, ref_vector=ref_vector)
             if orientations is None:
                 continue
 
