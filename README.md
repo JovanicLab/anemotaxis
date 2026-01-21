@@ -1,10 +1,10 @@
-﻿# Taxis Analysis (anemotaxis)
+﻿# Taxis Analysis (anemotaxis & others)
 
-A Python package for analyzing larval (anemo)taxis behavior from trajectory data. This package provides tools for processing, analyzing, and visualizing larval navigation behaviors in response to (wind) gradients. Written by Sharbatanu Chatterjee, PhD, as part of his postdoctoral research stint, with assistance from Github Copilot (Claude Sonent 4 and GPT-4.1).
+A Python package for analyzing larval taxis navigational behavior from laraval trajectory data. The script was initially meant to analyze anemotaixs, but has been generalized to include other forms of taxis and navigation as well. This package is still named anemotaxis to preserve the historical name. It provides tools for processing, analyzing, and visualizing larval navigation behaviors in response to (wind) gradients. Written by Sharbatanu Chatterjee, PhD, as part of his postdoctoral research, with assistance from Github Copilot (Claude Sonent 4 and GPT-4.1).
 
 ## Features
 
-- **Data Processing**: Load and preprocess trajectory data from `.mat` files
+- **Data Processing**: Load and preprocess trajectory data from `.mat` files and `.dat` files
 - **Behavioral Analysis**: Analyze run probability, turn behavior, head casting, and navigation indices
 - **Visualization**: Create publication-ready plots including polar plots, time series, and behavioral matrices
 - **Head Cast Detection**: Advanced algorithms for detecting and classifying head cast behaviors
