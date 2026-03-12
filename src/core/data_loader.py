@@ -583,10 +583,12 @@ def combine_analysis_results(result_files, analysis_type):
             n_larvae_total += data.get('n_larvae', 0)
             
             # Extract experiment date from filepath
+            # Extract experiment date from filepath
             experiment_date = 'unknown'
-            path_parts = filepath.split('/')
+            # Use os.path to split correctly on both Windows (\) and Mac/Linux (/)
+            path_parts = filepath.replace('\\', '/').split('/')
             for part in path_parts:
-                if len(part) == 15 and part.startswith('202'):  # Format: 20240226_145653
+                if re.match(r'^\d{8}_\d{6}$', part):  # Format: 20240226_145653
                     experiment_date = part
                     break
             
