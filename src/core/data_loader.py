@@ -6,6 +6,7 @@ from tqdm.notebook import tqdm
 import multiprocessing as mp
 import glob
 import scipy.stats as stats
+import re
 
 def get_behavior_data(f, field, i):
     """Extract behavior-related cell arrays from MATLAB struct.
@@ -582,7 +583,6 @@ def combine_analysis_results(result_files, analysis_type):
             data = results[analysis_type]
             n_larvae_total += data.get('n_larvae', 0)
             
-            # Extract experiment date from filepath
             # Extract experiment date from filepath
             experiment_date = 'unknown'
             # Use os.path to split correctly on both Windows (\) and Mac/Linux (/)
