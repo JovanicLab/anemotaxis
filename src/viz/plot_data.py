@@ -1135,7 +1135,7 @@ def plot_orientation_histogram(analysis_results, ax=None, show_plot=True, linest
 def plot_orientation_histogram_polar(analysis_results, ax=None, show_plot=True, 
                                    show_se=True, se_alpha=0.3, color=None, label=None,
                                    title=None, bar_style=True, tick_fontsize=8, n_radial_ticks=3,
-                                   min_amplitude=None, plot_type='run'):
+                                   min_amplitude=None, plot_type='run', linestyle='-'):
     """
     Universal function to plot orientation histogram in polar coordinates as bars with optional standard error lines.
     """
@@ -1237,16 +1237,28 @@ def plot_orientation_histogram_polar(analysis_results, ax=None, show_plot=True,
                     ax.plot([th, th], [lower_bound, upper_bound], color=color, linewidth=1.5, alpha=0.8)
                     ax.plot([th - cap_width/2, th + cap_width/2], [upper_bound, upper_bound], color=color, linewidth=1.5, alpha=0.8)
                     ax.plot([th - cap_width/2, th + cap_width/2], [lower_bound, lower_bound], color=color, linewidth=1.5, alpha=0.8)
+
+
     else:
         valid_mask = np.isfinite(plot_mean)
         if np.any(valid_mask):
             valid_theta = theta[valid_mask]
             valid_mean = plot_mean[valid_mask]
-            valid_se = plot_se[valid_mask] if len(plot_se) > 0 else []
-            ax.plot(valid_theta, valid_mean, color=color, linewidth=2, label=label)
+            valid_se = plot_se[valid_mask] if len(plot_se) > 0 else np.array([])
+
+            valid_theta_closed = np.append(valid_theta, valid_theta[0])
+            valid_mean_closed = np.append(valid_mean, valid_mean[0])
+
+            ax.plot(valid_theta_closed, valid_mean_closed, color=color, linewidth=2, 
+                    label=label, linestyle=linestyle)  # <-- use linestyle here
+
             if show_se and len(valid_se) > 0:
-                ax.fill_between(valid_theta, valid_mean - valid_se, valid_mean + valid_se,
+                valid_se_closed = np.append(valid_se, valid_se[0])
+                ax.fill_between(valid_theta_closed,
+                               valid_mean_closed - valid_se_closed,
+                               valid_mean_closed + valid_se_closed,
                                color=color, alpha=se_alpha)
+
     
     # Polar plot formatting
     ax.set_theta_zero_location('E')
@@ -3205,9 +3217,9 @@ def plot_genotype_comparison(genotype_data, analysis_type, plot_style='histogram
             )
             
         elif plot_style == 'polar':
-            # For polar plots, use alpha differences only (no color differences)
-            alpha_values = [0.8, 0.5]  # First genotype more opaque, second more transparent
-            alpha = alpha_values[i] if i < len(alpha_values) else 0.3
+            # Use the genotype's own se_alpha and linestyle from style for consistency with histogram
+            alpha = style.get('se_alpha', 0.3)
+            linestyle = style.get('linestyle', '-')  # <-- read linestyle from style
             
             # Extract only the parameters that plot_orientation_histogram_polar accepts
             polar_kwargs = {
@@ -3218,11 +3230,12 @@ def plot_genotype_comparison(genotype_data, analysis_type, plot_style='histogram
             # Add polar-specific parameters
             polar_kwargs.update({
                 'plot_type': behavior_plot_type,
-                'bar_style': True,
+                'bar_style': False,
                 'tick_fontsize': 10,
                 'se_alpha': alpha,
                 'label': label,
-                'color': base_color
+                'color': base_color,
+                'linestyle': linestyle  # <-- pass it through
             })
             
             plot_orientation_histogram_polar(
